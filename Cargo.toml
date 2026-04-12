@@ -1,0 +1,18 @@
+[package]
+name = "kudzu"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+ratatui = "0.28"
+crossterm = "0.28"
+notify = "6"
+notify-debouncer-full = "0.3"
+crossbeam-channel = "0.5"
+anyhow = "1"
+nucleo-matcher = "0.3"
+ignore = "0.4"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

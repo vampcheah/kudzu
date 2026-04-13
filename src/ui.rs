@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, Mode},
+    app::{App, Mode, PromptKind},
     tree::Node,
 };
 
@@ -262,6 +262,37 @@ fn highlighted_name(name: &str, indices: &[u32], base: Style) -> Vec<Span<'stati
 }
 
 fn draw_info(f: &mut Frame, app: &App, area: Rect) {
+    if let Some(prompt) = &app.input {
+        if prompt.kind == PromptKind::Delete {
+            let name = prompt
+                .target
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| prompt.target.display().to_string());
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("delete {}? ", name),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("(y/N)", Style::default().fg(HIDDEN_FG)),
+            ]);
+            f.render_widget(Paragraph::new(line), area);
+            return;
+        }
+        let label = match prompt.kind {
+            PromptKind::NewFile => "new file: ",
+            PromptKind::NewFolder => "new folder: ",
+            PromptKind::Rename => "rename: ",
+            PromptKind::Delete => unreachable!(),
+        };
+        let line = Line::from(vec![
+            Span::styled(label, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::raw(prompt.buffer.clone()),
+            Span::styled("▏", Style::default().fg(ACCENT)),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    }
     match app.mode {
         Mode::Search => {
             let line = Line::from(vec![
@@ -325,6 +356,11 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
         ("Ctrl-d / PgDn", "down 10"),
         ("Ctrl-u / PgUp", "up 10"),
         ("/", "search"),
+        ("n", "new file in selected dir"),
+        ("N", "new folder in selected dir"),
+        ("R", "rename selected"),
+        ("D", "delete selected (confirm y)"),
+        ("M", "open in file manager"),
         (".", "toggle hidden files"),
         ("i", "toggle .gitignore"),
         ("r", "rescan"),

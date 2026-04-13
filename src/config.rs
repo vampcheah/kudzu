@@ -14,6 +14,7 @@ pub struct Config {
     pub respect_gitignore: bool,
     pub double_click: DoubleClick,
     pub gui_editor: String,
+    pub file_manager: String,
     pub root: Option<PathBuf>,
 }
 
@@ -24,8 +25,19 @@ impl Default for Config {
             respect_gitignore: true,
             double_click: DoubleClick::Editor,
             gui_editor: "xdg-open".to_string(),
+            file_manager: default_file_manager().to_string(),
             root: None,
         }
+    }
+}
+
+fn default_file_manager() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(target_os = "windows") {
+        "explorer"
+    } else {
+        "xdg-open"
     }
 }
 
@@ -120,6 +132,7 @@ fn set_key(cfg: &mut Config, key: &str, value: &str) -> Result<(), String> {
         "respect_gitignore" => cfg.respect_gitignore = parse_bool(value)?,
         "double_click" => cfg.double_click = parse_double_click(value)?,
         "gui_editor" => cfg.gui_editor = value.to_string(),
+        "file_manager" => cfg.file_manager = value.to_string(),
         other => return Err(format!("unknown key `{}`", other)),
     }
     Ok(())
@@ -148,6 +161,10 @@ fn apply_cli<I: IntoIterator<Item = String>>(cfg: &mut Config, args: I) -> Resul
                 "gui-editor" => {
                     cfg.gui_editor = value
                         .ok_or_else(|| anyhow::anyhow!("--gui-editor requires =<cmd>"))?;
+                }
+                "file-manager" => {
+                    cfg.file_manager = value
+                        .ok_or_else(|| anyhow::anyhow!("--file-manager requires =<cmd>"))?;
                 }
                 "help" | "h" => {
                     print_help();
@@ -182,6 +199,7 @@ fn print_help() {
              --double-click=editor    double-click opens $EDITOR (default)\n\
              --double-click=gui       double-click spawns GUI editor\n\
              --gui-editor=<cmd>       GUI editor command (default: xdg-open)\n\
+             --file-manager=<cmd>     file manager command (default: xdg-open/open/explorer)\n\
              --help                   print this help\n\
          \n\
          CONFIG FILE:\n\

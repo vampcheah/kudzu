@@ -80,6 +80,11 @@ The editor is picked in the order `$EDITOR` > `$VISUAL` > `vi`.
 | `Ctrl-d` / `PageDown` | Scroll down 10 lines |
 | `Ctrl-u` / `PageUp` | Scroll up 10 lines |
 | `/` | Enter search mode |
+| `n` | New file in the selected directory |
+| `N` | New folder in the selected directory |
+| `R` | Rename the selected file/folder |
+| `D` | Delete the selected file/folder (confirm with `y`) |
+| `M` | Open the selected directory in the system file manager |
 | `.` | Toggle hidden files |
 | `i` | Toggle `.gitignore` handling |
 | `r` | Rescan |
@@ -97,6 +102,17 @@ The editor is picked in the order `$EDITOR` > `$VISUAL` > `vi`.
 | `Ctrl-w` | Delete one word |
 | `Esc` / `Ctrl-c` | Exit search |
 
+### Input prompt (new file / new folder / rename)
+
+| Key | Action |
+| --- | --- |
+| (type characters) | Edit name |
+| `Enter` | Confirm |
+| `Backspace` | Delete one character |
+| `Ctrl-w` | Delete one word |
+| `Ctrl-u` | Clear input |
+| `Esc` / `Ctrl-c` | Cancel |
+
 ## Configuration
 
 Config file location: `$XDG_CONFIG_HOME/kudzu/config.toml` (usually `~/.config/kudzu/config.toml`). All fields are optional; defaults are used when absent.
@@ -106,12 +122,14 @@ show_hidden = false          # show hidden files/folders at startup
 respect_gitignore = true     # respect .gitignore
 double_click = "editor"      # double-click behavior: "editor" (terminal $EDITOR) or "gui" (GUI editor)
 gui_editor = "xdg-open"      # command used when double_click = "gui"; supports args like "code -n"
+file_manager = "xdg-open"    # command used by `M` to open a folder; defaults to `open` on macOS, `explorer` on Windows
 ```
 
 Command-line flags override the config file:
 
 ```bash
 kudzu --show-hidden --double-click=gui --gui-editor=code
+kudzu --file-manager=nautilus
 kudzu --no-ignore ~/projects
 kudzu --help
 ```

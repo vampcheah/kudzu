@@ -1,5 +1,5 @@
 use std::{
-    env, io,
+    env, fs, io,
     path::PathBuf,
     process::Command,
     time::{Duration, Instant},
@@ -35,6 +35,24 @@ pub enum Mode {
     Search,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    NewFile,
+    NewFolder,
+    Rename,
+    Delete,
+}
+
+#[derive(Debug, Clone)]
+pub struct Prompt {
+    pub kind: PromptKind,
+    pub buffer: String,
+    /// For NewFile/NewFolder: the parent directory the new entry will be
+    /// created in. For Rename/Delete: the full path of the entry being
+    /// renamed or deleted.
+    pub target: PathBuf,
+}
+
 pub struct App {
     pub tree: Tree,
     pub selected: usize,
@@ -52,6 +70,7 @@ pub struct App {
     /// Scroll offset used by the last frame (for search mode, which
     /// recomputes scroll in the renderer).
     pub list_scroll: usize,
+    pub input: Option<Prompt>,
     last_click: Option<(Instant, u16, u16)>,
     watcher: FsWatcher,
 }
@@ -60,6 +79,7 @@ enum Action {
     None,
     OpenInEditor(PathBuf),
     OpenInGui(PathBuf),
+    OpenInFileManager(PathBuf),
     RootChanged,
 }
 
@@ -85,6 +105,7 @@ impl App {
             show_help: false,
             list_area: None,
             list_scroll: 0,
+            input: None,
             last_click: None,
             watcher,
         })
@@ -308,6 +329,11 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('n') => self.start_new_file(),
+            KeyCode::Char('N') => self.start_new_folder(),
+            KeyCode::Char('R') => self.start_rename(),
+            KeyCode::Char('D') => self.start_delete(),
+            KeyCode::Char('M') => return Ok(self.open_selected_in_filemanager()),
             KeyCode::Char('/') => self.enter_search()?,
             KeyCode::Char('h') => self.show_help = true,
             KeyCode::Char('.') => {
@@ -393,6 +419,282 @@ impl App {
         Ok(Action::None)
     }
 
+    /// Resolve the directory that should host a new file/folder, or that the
+    /// "open in file manager" action should target. If a directory is
+    /// selected, it's used directly; if a file is selected, its parent is
+    /// used. Returns `None` if nothing sensible is available.
+    fn target_dir(&self) -> Option<PathBuf> {
+        let idx = self.selected_node()?;
+        let node = &self.tree.nodes[idx];
+        if node.is_dir {
+            Some(node.path.clone())
+        } else {
+            node.parent
+                .map(|p| self.tree.nodes[p].path.clone())
+                .or_else(|| node.path.parent().map(|p| p.to_path_buf()))
+        }
+    }
+
+    fn start_new_file(&mut self) {
+        match self.target_dir() {
+            Some(dir) => {
+                self.input = Some(Prompt {
+                    kind: PromptKind::NewFile,
+                    buffer: String::new(),
+                    target: dir,
+                });
+            }
+            None => self.flash("no target directory"),
+        }
+    }
+
+    fn start_new_folder(&mut self) {
+        match self.target_dir() {
+            Some(dir) => {
+                self.input = Some(Prompt {
+                    kind: PromptKind::NewFolder,
+                    buffer: String::new(),
+                    target: dir,
+                });
+            }
+            None => self.flash("no target directory"),
+        }
+    }
+
+    fn start_rename(&mut self) {
+        let idx = match self.selected_node() {
+            Some(i) => i,
+            None => {
+                self.flash("nothing selected");
+                return;
+            }
+        };
+        if idx == 0 {
+            self.flash("cannot rename the root");
+            return;
+        }
+        let node = &self.tree.nodes[idx];
+        self.input = Some(Prompt {
+            kind: PromptKind::Rename,
+            buffer: node.name.clone(),
+            target: node.path.clone(),
+        });
+    }
+
+    fn start_delete(&mut self) {
+        let idx = match self.selected_node() {
+            Some(i) => i,
+            None => {
+                self.flash("nothing selected");
+                return;
+            }
+        };
+        if idx == 0 {
+            self.flash("cannot delete the root");
+            return;
+        }
+        let node = &self.tree.nodes[idx];
+        self.input = Some(Prompt {
+            kind: PromptKind::Delete,
+            buffer: String::new(),
+            target: node.path.clone(),
+        });
+    }
+
+    fn open_selected_in_filemanager(&mut self) -> Action {
+        match self.target_dir() {
+            Some(dir) => Action::OpenInFileManager(dir),
+            None => {
+                self.flash("no target directory");
+                Action::None
+            }
+        }
+    }
+
+    fn cancel_prompt(&mut self) {
+        self.input = None;
+    }
+
+    fn on_key_prompt(&mut self, key: KeyEvent) -> Result<Action> {
+        let prompt = match self.input.as_mut() {
+            Some(p) => p,
+            None => return Ok(Action::None),
+        };
+        if prompt.kind == PromptKind::Delete {
+            match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => return self.confirm_prompt(),
+                _ => {
+                    self.cancel_prompt();
+                    self.flash("delete cancelled");
+                }
+            }
+            return Ok(Action::None);
+        }
+        match key.code {
+            KeyCode::Esc => self.cancel_prompt(),
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cancel_prompt()
+            }
+            KeyCode::Enter => return self.confirm_prompt(),
+            KeyCode::Backspace => {
+                prompt.buffer.pop();
+            }
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                while matches!(prompt.buffer.chars().last(), Some(c) if c.is_whitespace()) {
+                    prompt.buffer.pop();
+                }
+                while matches!(prompt.buffer.chars().last(), Some(c) if !c.is_whitespace()) {
+                    prompt.buffer.pop();
+                }
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                prompt.buffer.clear();
+            }
+            KeyCode::Char(c) => prompt.buffer.push(c),
+            _ => {}
+        }
+        Ok(Action::None)
+    }
+
+    fn confirm_prompt(&mut self) -> Result<Action> {
+        let prompt = match self.input.take() {
+            Some(p) => p,
+            None => return Ok(Action::None),
+        };
+        if prompt.kind == PromptKind::Delete {
+            return self.perform_delete(&prompt.target);
+        }
+        let name = prompt.buffer.trim().to_string();
+        if name.is_empty() {
+            self.flash("cancelled: empty name");
+            return Ok(Action::None);
+        }
+        if name.contains('/') || name.contains('\\') {
+            self.flash("name may not contain path separators");
+            return Ok(Action::None);
+        }
+
+        match prompt.kind {
+            PromptKind::NewFile => {
+                let new_path = prompt.target.join(&name);
+                if new_path.exists() {
+                    self.flash(format!("exists: {}", name));
+                    return Ok(Action::None);
+                }
+                if let Err(e) = fs::File::create(&new_path) {
+                    self.flash(format!("create failed: {}", e));
+                    return Ok(Action::None);
+                }
+                self.post_mutation(&prompt.target, Some(&new_path));
+                self.flash(format!("created {}", name));
+            }
+            PromptKind::NewFolder => {
+                let new_path = prompt.target.join(&name);
+                if new_path.exists() {
+                    self.flash(format!("exists: {}", name));
+                    return Ok(Action::None);
+                }
+                if let Err(e) = fs::create_dir(&new_path) {
+                    self.flash(format!("mkdir failed: {}", e));
+                    return Ok(Action::None);
+                }
+                self.post_mutation(&prompt.target, Some(&new_path));
+                self.flash(format!("created {}/", name));
+            }
+            PromptKind::Delete => unreachable!("handled above"),
+            PromptKind::Rename => {
+                let parent = match prompt.target.parent() {
+                    Some(p) => p.to_path_buf(),
+                    None => {
+                        self.flash("cannot rename: no parent");
+                        return Ok(Action::None);
+                    }
+                };
+                if name == prompt.target.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default() {
+                    return Ok(Action::None);
+                }
+                let new_path = parent.join(&name);
+                if new_path.exists() {
+                    self.flash(format!("exists: {}", name));
+                    return Ok(Action::None);
+                }
+                if let Err(e) = fs::rename(&prompt.target, &new_path) {
+                    self.flash(format!("rename failed: {}", e));
+                    return Ok(Action::None);
+                }
+                self.post_mutation(&parent, Some(&new_path));
+                self.flash(format!("renamed → {}", name));
+            }
+        }
+        Ok(Action::None)
+    }
+
+    fn perform_delete(&mut self, target: &PathBuf) -> Result<Action> {
+        let parent = match target.parent() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                self.flash("cannot delete: no parent");
+                return Ok(Action::None);
+            }
+        };
+        let name = target
+            .file_name()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| target.display().to_string());
+        // Preserve the current visible position so the selection stays near
+        // where the deleted entry was (rather than jumping to the top).
+        let prev_pos = self.selected;
+        let meta = fs::symlink_metadata(target);
+        let res = match meta {
+            Ok(m) if m.file_type().is_dir() && !m.file_type().is_symlink() => {
+                fs::remove_dir_all(target)
+            }
+            _ => fs::remove_file(target),
+        };
+        if let Err(e) = res {
+            self.flash(format!("delete failed: {}", e));
+            return Ok(Action::None);
+        }
+        self.post_mutation(&parent, None);
+        if !self.tree.visible.is_empty() {
+            self.selected = prev_pos.min(self.tree.visible.len() - 1);
+        } else {
+            self.selected = 0;
+        }
+        self.flash(format!("deleted {}", name));
+        Ok(Action::None)
+    }
+
+    /// After creating/renaming on disk, refresh the affected directory and
+    /// place the selection on the new node when possible.
+    fn post_mutation(&mut self, parent_dir: &PathBuf, select_path: Option<&PathBuf>) {
+        if let Some(parent_idx) = self.tree.find_by_path(parent_dir) {
+            if self.tree.nodes[parent_idx].is_dir
+                && !self.tree.nodes[parent_idx].expanded
+            {
+                if let Err(e) = self.tree.expand(parent_idx) {
+                    self.flash(format!("expand failed: {}", e));
+                    return;
+                }
+            }
+        }
+        if let Err(e) = self.tree.refresh_dir(parent_dir) {
+            self.flash(format!("refresh failed: {}", e));
+            return;
+        }
+        self.tree.rebuild_visible();
+        if let Some(path) = select_path {
+            if let Some(node_idx) = self.tree.find_by_path(path) {
+                if let Some(pos) = self.tree.visible.iter().position(|&i| i == node_idx) {
+                    self.selected = pos;
+                }
+            }
+        }
+        if self.selected >= self.tree.visible.len() {
+            self.selected = self.tree.visible.len().saturating_sub(1);
+        }
+    }
+
     fn on_key(&mut self, key: KeyEvent) -> Result<Action> {
         if key.kind != KeyEventKind::Press {
             return Ok(Action::None);
@@ -408,6 +710,9 @@ impl App {
                 self.show_help = false;
             }
             return Ok(Action::None);
+        }
+        if self.input.is_some() {
+            return self.on_key_prompt(key);
         }
         match self.mode {
             Mode::Normal => self.on_key_normal(key),
@@ -594,6 +899,20 @@ pub fn run<B: Backend + io::Write>(
             Action::OpenInGui(path) => {
                 // Detach — we stay in the TUI while the GUI app runs.
                 let (bin, extra) = split_command(&app.cfg.gui_editor);
+                match Command::new(&bin)
+                    .args(&extra)
+                    .arg(&path)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(_) => app.flash(format!("opened {} in {}", path.display(), bin)),
+                    Err(e) => app.flash(format!("{}: {}", bin, e)),
+                }
+            }
+            Action::OpenInFileManager(path) => {
+                let (bin, extra) = split_command(&app.cfg.file_manager);
                 match Command::new(&bin)
                     .args(&extra)
                     .arg(&path)

@@ -1,4 +1,3 @@
-use std::time::SystemTime;
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -26,8 +25,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(1), // header
             Constraint::Min(1),    // body (tree or search results)
-            Constraint::Length(1), // input (search) or status
-            Constraint::Length(1), // help hint
+            Constraint::Length(1), // footer: info/prompt + help hint
         ])
         .split(f.area());
 
@@ -37,11 +35,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Mode::Search => draw_search(f, app, chunks[1]),
     }
     draw_info(f, app, chunks[2]);
-    let hint = Paragraph::new(Span::styled(
-        "h help",
-        Style::default().fg(HIDDEN_FG),
-    ));
-    f.render_widget(hint, chunks[3]);
     if app.show_help {
         draw_help_overlay(f, app, f.area());
     }
@@ -106,25 +99,13 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     };
     let mode_style = Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD);
     let root = app.tree.root.display().to_string();
-    let mut spans = vec![
+    let spans = vec![
         Span::styled(mode_text, mode_style),
         Span::raw(" "),
         Span::styled("kudzu", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::raw(" · "),
         Span::raw(root),
     ];
-    if !app.tree.opts.respect_gitignore {
-        spans.push(Span::styled(
-            "  [ignore off]",
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-    if app.tree.opts.show_hidden {
-        spans.push(Span::styled(
-            "  [hidden]",
-            Style::default().fg(Color::Yellow),
-        ));
-    }
     let p = Paragraph::new(Line::from(spans));
     f.render_widget(p, area);
 }
@@ -365,33 +346,44 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
                 } else {
                     human_size(n.size)
                 };
-                let mtime = n.mtime.map(format_time).unwrap_or_default();
-                format!(
-                    " {}/{}  {}  {}  {}",
-                    app.selected + 1,
-                    app.tree.visible.len(),
-                    size,
-                    mtime,
-                    n.path.display()
-                )
+                format!(" {}", size)
             } else {
                 String::new()
             };
             let left = Paragraph::new(Span::styled(info, Style::default().fg(Color::Gray)));
-            let flash = if !app.status.is_empty() {
-                Span::styled(
-                    format!("  {}", app.status),
+
+            let mut right_spans: Vec<Span> =
+                vec![Span::styled("h help", Style::default().fg(HIDDEN_FG))];
+            if !app.tree.opts.respect_gitignore {
+                right_spans.push(Span::raw("  "));
+                right_spans.push(Span::styled(
+                    "[ignore off]",
+                    Style::default().fg(Color::Yellow),
+                ));
+            }
+            if app.tree.opts.show_hidden {
+                right_spans.push(Span::raw("  "));
+                right_spans.push(Span::styled("[hidden]", Style::default().fg(Color::Yellow)));
+            }
+            if !app.status.is_empty() {
+                right_spans.push(Span::raw("  "));
+                right_spans.push(Span::styled(
+                    app.status.clone(),
                     Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                )
-            } else {
-                Span::raw("")
-            };
+                ));
+            }
+            let right_line = Line::from(right_spans);
+            let right_width = (right_line.width() as u16 + 2).min(area.width);
+
             let horiz = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Min(1), Constraint::Length(40)])
+                .constraints([Constraint::Min(1), Constraint::Length(right_width)])
                 .split(area);
             f.render_widget(left, horiz[0]);
-            f.render_widget(Paragraph::new(Line::from(flash)), horiz[1]);
+            f.render_widget(
+                Paragraph::new(right_line).alignment(ratatui::layout::Alignment::Right),
+                horiz[1],
+            );
         }
     }
 }
@@ -499,34 +491,3 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-fn format_time(t: SystemTime) -> String {
-    match t.duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(d) => {
-            let secs = d.as_secs();
-            let (y, mo, da, h, mi) = epoch_to_ymdhm(secs);
-            format!("{:04}-{:02}-{:02} {:02}:{:02}", y, mo, da, h, mi)
-        }
-        Err(_) => String::new(),
-    }
-}
-
-/// Minimal UTC epoch → (year, month, day, hour, minute). Local-tz
-/// conversion isn't worth a dep here; times display as UTC.
-fn epoch_to_ymdhm(secs: u64) -> (i32, u32, u32, u32, u32) {
-    let days = (secs / 86400) as i64;
-    let sod = secs % 86400;
-    let h = (sod / 3600) as u32;
-    let mi = ((sod % 3600) / 60) as u32;
-    // Howard Hinnant's civil_from_days algorithm.
-    let z = days + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y = if m <= 2 { y + 1 } else { y } as i32;
-    (y, m, d, h, mi)
-}

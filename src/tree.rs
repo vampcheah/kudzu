@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 
 use anyhow::Result;
@@ -32,7 +31,6 @@ pub struct Node {
     pub is_hidden: bool,
     pub is_symlink: bool,
     pub size: u64,
-    pub mtime: Option<SystemTime>,
     pub parent: Option<usize>,
     pub expanded: bool,
     pub children_loaded: bool,
@@ -70,7 +68,6 @@ impl Tree {
             is_hidden: false,
             is_symlink: false,
             size: meta.as_ref().map(|m| m.len()).unwrap_or(0),
-            mtime: meta.as_ref().and_then(|m| m.modified().ok()),
             parent: None,
             expanded: false,
             children_loaded: false,
@@ -167,7 +164,6 @@ impl Tree {
                 is_hidden: entry.is_hidden,
                 is_symlink: entry.is_symlink,
                 size: entry.size,
-                mtime: entry.mtime,
                 parent: Some(idx),
                 expanded: false,
                 children_loaded: false,
@@ -356,7 +352,6 @@ struct Entry {
     is_hidden: bool,
     is_symlink: bool,
     size: u64,
-    mtime: Option<SystemTime>,
 }
 
 fn read_children(path: &Path, opts: &ScanOptions) -> Vec<Entry> {
@@ -507,6 +502,5 @@ fn entry_from_dir_entry(path: &Path) -> Option<Entry> {
         is_dir,
         is_symlink,
         size: meta.len(),
-        mtime: meta.modified().ok(),
     })
 }

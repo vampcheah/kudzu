@@ -27,11 +27,12 @@ build: check-rust
 install: build
 	install -d $(BINDIR)
 	install -m 0755 $(TARGET) $(BINDIR)/$(BIN)
-	@echo "Installed $(BINDIR)/$(BIN)"
+	ln -sf $(BIN) $(BINDIR)/kz
+	@echo "Installed $(BINDIR)/$(BIN) (with kz symlink)"
 
 uninstall:
-	rm -f $(BINDIR)/$(BIN)
-	@echo "Removed $(BINDIR)/$(BIN)"
+	rm -f $(BINDIR)/$(BIN) $(BINDIR)/kz
+	@echo "Removed $(BINDIR)/$(BIN) and kz"
 
 clean:
 	@. "$$HOME/.cargo/env" 2>/dev/null; cargo clean

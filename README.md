@@ -16,13 +16,15 @@ Keyboard-driven, fuzzy search, respects `.gitignore`, auto-refreshes on filesyst
 
 ## Installation
 
-### Linux / macOS (one-shot)
+After installing via any method below, both `kudzu` and the short alias `kz` work from anywhere in your shell.
+
+### Linux / macOS (one-shot, recommended)
 
 ```bash
 git clone https://github.com/<your-user>/kudzu.git
 cd kudzu
-sudo make install            # installs to /usr/local/bin by default
-# Or install to your home directory without sudo:
+sudo make install            # installs to /usr/local/bin by default, creates kz symlink
+# Or install to your home directory without sudo (make sure $HOME/.local/bin is in PATH):
 PREFIX=$HOME/.local make install
 ```
 
@@ -48,10 +50,57 @@ If `cargo` is not found, the script downloads `rustup-init.exe` and installs the
 Requires Rust 1.70+.
 
 ```bash
-cargo install --path .
-# Or just build:
-cargo build --release && ./target/release/kudzu
+cargo install --path .       # installs to ~/.cargo/bin/kudzu
+# Uninstall:
+cargo uninstall kudzu
 ```
+
+Note: `cargo install` does **not** create the `kz` alias. Add one manually if wanted:
+
+```bash
+ln -sf ~/.cargo/bin/kudzu ~/.cargo/bin/kz
+```
+
+### Build a standalone binary and install manually
+
+Useful if you want to install without `make`, or distribute the binary to another machine.
+
+```bash
+cargo build --release                       # produces target/release/kudzu
+sudo install -m 0755 target/release/kudzu /usr/local/bin/kudzu
+sudo ln -sf kudzu /usr/local/bin/kz         # optional: short alias
+```
+
+Uninstall:
+
+```bash
+sudo rm -f /usr/local/bin/kudzu /usr/local/bin/kz
+```
+
+### Prebuilt binary / cross-machine distribution
+
+To ship a binary that runs on other Linux machines without requiring Rust or matching glibc, build a fully static binary with musl:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+strip target/x86_64-unknown-linux-musl/release/kudzu           # optional: smaller binary
+tar czf kudzu-1.0.0-x86_64-linux.tar.gz \
+    -C target/x86_64-unknown-linux-musl/release kudzu
+```
+
+On the target machine:
+
+```bash
+tar xzf kudzu-1.0.0-x86_64-linux.tar.gz
+sudo install -m 0755 kudzu /usr/local/bin/kudzu
+sudo ln -sf kudzu /usr/local/bin/kz         # optional
+```
+
+Caveats for cross-machine binaries:
+
+- Architecture must match (`uname -m`): x86_64 and aarch64 are not interchangeable.
+- Without musl, the default binary dynamically links glibc — the target machine's glibc must be at least as new as the build machine's.
 
 ## Usage
 

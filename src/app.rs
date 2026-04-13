@@ -47,10 +47,125 @@ pub enum PromptKind {
 pub struct Prompt {
     pub kind: PromptKind,
     pub buffer: String,
+    /// Cursor position as a char (not byte) index into `buffer`.
+    pub cursor: usize,
     /// For NewFile/NewFolder: the parent directory the new entry will be
     /// created in. For Rename/Delete: the full path of the entry being
     /// renamed or deleted.
     pub target: PathBuf,
+}
+
+impl Prompt {
+    fn char_len(&self) -> usize {
+        self.buffer.chars().count()
+    }
+
+    fn byte_at(&self, char_idx: usize) -> usize {
+        self.buffer
+            .char_indices()
+            .nth(char_idx)
+            .map(|(b, _)| b)
+            .unwrap_or(self.buffer.len())
+    }
+
+    fn insert_char(&mut self, c: char) {
+        let byte = self.byte_at(self.cursor);
+        self.buffer.insert(byte, c);
+        self.cursor += 1;
+    }
+
+    fn delete_before(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let start = self.byte_at(self.cursor - 1);
+        let end = self.byte_at(self.cursor);
+        self.buffer.replace_range(start..end, "");
+        self.cursor -= 1;
+    }
+
+    fn delete_at(&mut self) {
+        let len = self.char_len();
+        if self.cursor >= len {
+            return;
+        }
+        let start = self.byte_at(self.cursor);
+        let end = self.byte_at(self.cursor + 1);
+        self.buffer.replace_range(start..end, "");
+    }
+
+    fn delete_word_before(&mut self) {
+        let chars: Vec<char> = self.buffer.chars().collect();
+        let mut i = self.cursor;
+        while i > 0 && chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        while i > 0 && !chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        let start = self.byte_at(i);
+        let end = self.byte_at(self.cursor);
+        self.buffer.replace_range(start..end, "");
+        self.cursor = i;
+    }
+
+    fn kill_to_start(&mut self) {
+        let end = self.byte_at(self.cursor);
+        self.buffer.replace_range(0..end, "");
+        self.cursor = 0;
+    }
+
+    fn move_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    fn move_right(&mut self) {
+        let len = self.char_len();
+        if self.cursor < len {
+            self.cursor += 1;
+        }
+    }
+
+    fn move_home(&mut self) {
+        self.cursor = 0;
+    }
+
+    fn move_end(&mut self) {
+        self.cursor = self.char_len();
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuItem {
+    NewFolder,
+    NewFile,
+    Rename,
+    OpenFile,
+    OpenFolder,
+}
+
+impl MenuItem {
+    pub fn label(self) -> &'static str {
+        match self {
+            MenuItem::NewFolder => "New Folder",
+            MenuItem::NewFile => "New File",
+            MenuItem::Rename => "Rename",
+            MenuItem::OpenFile => "Open File",
+            MenuItem::OpenFolder => "Open Folder",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextMenu {
+    /// Tree node index the menu targets. `None` when the right-click landed
+    /// on empty space — in that case actions operate on the tree root.
+    pub target: Option<usize>,
+    pub items: Vec<MenuItem>,
+    pub selected: usize,
+    pub anchor: (u16, u16),
 }
 
 pub struct App {
@@ -71,6 +186,10 @@ pub struct App {
     /// recomputes scroll in the renderer).
     pub list_scroll: usize,
     pub input: Option<Prompt>,
+    pub menu: Option<ContextMenu>,
+    /// Screen rect of the context menu popup (set by UI each frame while
+    /// the menu is visible). Used by mouse handlers to hit-test clicks.
+    pub menu_rect: Option<Rect>,
     last_click: Option<(Instant, u16, u16)>,
     watcher: FsWatcher,
 }
@@ -106,6 +225,8 @@ impl App {
             list_area: None,
             list_scroll: 0,
             input: None,
+            menu: None,
+            menu_rect: None,
             last_click: None,
             watcher,
         })
@@ -441,6 +562,7 @@ impl App {
                 self.input = Some(Prompt {
                     kind: PromptKind::NewFile,
                     buffer: String::new(),
+                    cursor: 0,
                     target: dir,
                 });
             }
@@ -454,6 +576,7 @@ impl App {
                 self.input = Some(Prompt {
                     kind: PromptKind::NewFolder,
                     buffer: String::new(),
+                    cursor: 0,
                     target: dir,
                 });
             }
@@ -474,9 +597,12 @@ impl App {
             return;
         }
         let node = &self.tree.nodes[idx];
+        let name = node.name.clone();
+        let cursor = name.chars().count();
         self.input = Some(Prompt {
             kind: PromptKind::Rename,
-            buffer: node.name.clone(),
+            buffer: name,
+            cursor,
             target: node.path.clone(),
         });
     }
@@ -497,6 +623,7 @@ impl App {
         self.input = Some(Prompt {
             kind: PromptKind::Delete,
             buffer: String::new(),
+            cursor: 0,
             target: node.path.clone(),
         });
     }
@@ -536,21 +663,31 @@ impl App {
                 self.cancel_prompt()
             }
             KeyCode::Enter => return self.confirm_prompt(),
-            KeyCode::Backspace => {
-                prompt.buffer.pop();
+            KeyCode::Left => prompt.move_left(),
+            KeyCode::Right => prompt.move_right(),
+            KeyCode::Home => prompt.move_home(),
+            KeyCode::End => prompt.move_end(),
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                prompt.move_home()
             }
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                prompt.move_end()
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                prompt.move_left()
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                prompt.move_right()
+            }
+            KeyCode::Backspace => prompt.delete_before(),
+            KeyCode::Delete => prompt.delete_at(),
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                while matches!(prompt.buffer.chars().last(), Some(c) if c.is_whitespace()) {
-                    prompt.buffer.pop();
-                }
-                while matches!(prompt.buffer.chars().last(), Some(c) if !c.is_whitespace()) {
-                    prompt.buffer.pop();
-                }
+                prompt.delete_word_before()
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                prompt.buffer.clear();
+                prompt.kill_to_start()
             }
-            KeyCode::Char(c) => prompt.buffer.push(c),
+            KeyCode::Char(c) => prompt.insert_char(c),
             _ => {}
         }
         Ok(Action::None)
@@ -695,6 +832,176 @@ impl App {
         }
     }
 
+    fn menu_target_dir(&self, target: Option<usize>) -> PathBuf {
+        match target {
+            Some(idx) => {
+                let node = &self.tree.nodes[idx];
+                if node.is_dir {
+                    node.path.clone()
+                } else {
+                    node.parent
+                        .map(|p| self.tree.nodes[p].path.clone())
+                        .unwrap_or_else(|| self.tree.root.clone())
+                }
+            }
+            None => self.tree.root.clone(),
+        }
+    }
+
+    fn open_context_menu(&mut self, anchor: (u16, u16), target: Option<usize>) {
+        let mut items = vec![MenuItem::NewFolder, MenuItem::NewFile];
+        match target {
+            Some(idx) if idx != 0 => {
+                items.push(MenuItem::Rename);
+                if self.tree.nodes[idx].is_dir {
+                    items.push(MenuItem::OpenFolder);
+                } else {
+                    items.push(MenuItem::OpenFile);
+                }
+            }
+            _ => {
+                items.push(MenuItem::OpenFolder);
+            }
+        }
+        self.menu = Some(ContextMenu {
+            target,
+            items,
+            selected: 0,
+            anchor,
+        });
+    }
+
+    fn on_key_menu(&mut self, key: KeyEvent) -> Result<Action> {
+        let menu = match self.menu.as_mut() {
+            Some(m) => m,
+            None => return Ok(Action::None),
+        };
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.menu = None,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.menu = None
+            }
+            KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') => {
+                if menu.selected > 0 {
+                    menu.selected -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => {
+                if menu.selected + 1 < menu.items.len() {
+                    menu.selected += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let item = menu.items[menu.selected];
+                let target = menu.target;
+                self.menu = None;
+                return self.execute_menu_item(item, target);
+            }
+            _ => {}
+        }
+        Ok(Action::None)
+    }
+
+    fn execute_menu_item(
+        &mut self,
+        item: MenuItem,
+        target: Option<usize>,
+    ) -> Result<Action> {
+        match item {
+            MenuItem::NewFile => {
+                let dir = self.menu_target_dir(target);
+                self.input = Some(Prompt {
+                    kind: PromptKind::NewFile,
+                    buffer: String::new(),
+                    cursor: 0,
+                    target: dir,
+                });
+            }
+            MenuItem::NewFolder => {
+                let dir = self.menu_target_dir(target);
+                self.input = Some(Prompt {
+                    kind: PromptKind::NewFolder,
+                    buffer: String::new(),
+                    cursor: 0,
+                    target: dir,
+                });
+            }
+            MenuItem::Rename => {
+                if let Some(idx) = target {
+                    if idx != 0 {
+                        let node = &self.tree.nodes[idx];
+                        let name = node.name.clone();
+                        let cursor = name.chars().count();
+                        self.input = Some(Prompt {
+                            kind: PromptKind::Rename,
+                            buffer: name,
+                            cursor,
+                            target: node.path.clone(),
+                        });
+                    }
+                }
+            }
+            MenuItem::OpenFile => {
+                if let Some(idx) = target {
+                    let node = &self.tree.nodes[idx];
+                    if !node.is_dir {
+                        return Ok(Action::OpenInEditor(node.path.clone()));
+                    }
+                }
+            }
+            MenuItem::OpenFolder => {
+                let dir = self.menu_target_dir(target);
+                return Ok(Action::OpenInFileManager(dir));
+            }
+        }
+        Ok(Action::None)
+    }
+
+    fn on_mouse_menu(&mut self, m: MouseEvent) -> Result<Action> {
+        let rect = match self.menu_rect {
+            Some(r) => r,
+            None => {
+                self.menu = None;
+                return Ok(Action::None);
+            }
+        };
+        let inside = m.column >= rect.x
+            && m.column < rect.x + rect.width
+            && m.row >= rect.y
+            && m.row < rect.y + rect.height;
+        match m.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if !inside {
+                    self.menu = None;
+                    return Ok(Action::None);
+                }
+                // Item rows start after the top border.
+                let row_in = m.row.saturating_sub(rect.y) as i32 - 1;
+                if let Some(menu) = self.menu.as_mut() {
+                    if row_in >= 0 && (row_in as usize) < menu.items.len() {
+                        let item = menu.items[row_in as usize];
+                        let target = menu.target;
+                        self.menu = None;
+                        return self.execute_menu_item(item, target);
+                    }
+                }
+            }
+            MouseEventKind::Down(_) => {
+                self.menu = None;
+            }
+            MouseEventKind::Moved if inside => {
+                let row_in = m.row.saturating_sub(rect.y) as i32 - 1;
+                if let Some(menu) = self.menu.as_mut() {
+                    if row_in >= 0 && (row_in as usize) < menu.items.len() {
+                        menu.selected = row_in as usize;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(Action::None)
+    }
+
     fn on_key(&mut self, key: KeyEvent) -> Result<Action> {
         if key.kind != KeyEventKind::Press {
             return Ok(Action::None);
@@ -714,6 +1021,9 @@ impl App {
         if self.input.is_some() {
             return self.on_key_prompt(key);
         }
+        if self.menu.is_some() {
+            return self.on_key_menu(key);
+        }
         match self.mode {
             Mode::Normal => self.on_key_normal(key),
             Mode::Search => self.on_key_search(key),
@@ -721,6 +1031,9 @@ impl App {
     }
 
     fn on_mouse(&mut self, m: MouseEvent) -> Result<Action> {
+        if self.menu.is_some() {
+            return self.on_mouse_menu(m);
+        }
         let area = match self.list_area {
             Some(a) => a,
             None => return Ok(Action::None),
@@ -740,6 +1053,17 @@ impl App {
                 if inside {
                     self.move_in_current_mode(-3);
                 }
+            }
+            MouseEventKind::Down(MouseButton::Right) if inside && self.mode == Mode::Normal => {
+                let row_offset = (m.row - area.y) as usize;
+                let target_row = self.list_scroll + row_offset;
+                let target = if target_row < self.tree.visible.len() {
+                    self.selected = target_row;
+                    Some(self.tree.visible[target_row])
+                } else {
+                    None
+                };
+                self.open_context_menu((m.column, m.row), target);
             }
             MouseEventKind::Down(MouseButton::Left) if inside => {
                 let row_offset = (m.row - area.y) as usize;

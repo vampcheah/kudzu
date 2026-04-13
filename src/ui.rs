@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, Mode, PromptKind},
+    app::{App, ContextMenu, Mode, PromptKind},
     tree::Node,
 };
 
@@ -45,6 +45,58 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.show_help {
         draw_help_overlay(f, app, f.area());
     }
+    if app.menu.is_some() {
+        draw_context_menu(f, app, f.area());
+    } else {
+        app.menu_rect = None;
+    }
+}
+
+fn draw_context_menu(f: &mut Frame, app: &mut App, area: Rect) {
+    let menu: ContextMenu = match &app.menu {
+        Some(m) => m.clone(),
+        None => return,
+    };
+    let max_label = menu
+        .items
+        .iter()
+        .map(|i| i.label().chars().count())
+        .max()
+        .unwrap_or(10);
+    let width = (max_label as u16 + 4).min(area.width);
+    let height = (menu.items.len() as u16 + 2).min(area.height);
+    let mut x = menu.anchor.0;
+    let mut y = menu.anchor.1;
+    if x + width > area.x + area.width {
+        x = (area.x + area.width).saturating_sub(width);
+    }
+    if y + height > area.y + area.height {
+        y = (area.y + area.height).saturating_sub(height);
+    }
+    let rect = Rect::new(x, y, width, height);
+
+    f.render_widget(Clear, rect);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(" menu ");
+    let lines: Vec<Line> = menu
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let style = if i == menu.selected {
+                Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let pad = max_label.saturating_sub(item.label().chars().count());
+            let text = format!(" {}{} ", item.label(), " ".repeat(pad));
+            Line::from(Span::styled(text, style))
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines).block(block), rect);
+    app.menu_rect = Some(rect);
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
@@ -285,10 +337,13 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
             PromptKind::Rename => "rename: ",
             PromptKind::Delete => unreachable!(),
         };
+        let before: String = prompt.buffer.chars().take(prompt.cursor).collect();
+        let after: String = prompt.buffer.chars().skip(prompt.cursor).collect();
         let line = Line::from(vec![
             Span::styled(label, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
-            Span::raw(prompt.buffer.clone()),
+            Span::raw(before),
             Span::styled("▏", Style::default().fg(ACCENT)),
+            Span::raw(after),
         ]);
         f.render_widget(Paragraph::new(line), area);
         return;

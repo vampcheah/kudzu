@@ -10,7 +10,7 @@ Keyboard-driven, fuzzy search, respects `.gitignore`, auto-refreshes on filesyst
 - 🔍 Fuzzy search (powered by [nucleo-matcher](https://github.com/helix-editor/nucleo)), press Enter to jump
 - 🙈 Respects `.gitignore`, toggle hidden files on demand
 - 👀 Filesystem watcher (powered by [notify](https://github.com/notify-rs/notify)), auto-refresh on changes
-- 🖱️ Mouse support: scroll, click to select, double-click to expand or open
+- 🖱️ Mouse support: scroll, click to select, double-click to expand or open, right-click for a context menu
 - ✏️ `Enter` / `o` opens the selected file in `$EDITOR`
 - ⚡ Fast startup — only expanded directories are scanned
 
@@ -102,15 +102,38 @@ The editor is picked in the order `$EDITOR` > `$VISUAL` > `vi`.
 | `Ctrl-w` | Delete one word |
 | `Esc` / `Ctrl-c` | Exit search |
 
+### Context menu (right-click)
+
+Right-click inside the tree to open a menu. The items shown depend on what
+was clicked:
+
+| Target | Items |
+| --- | --- |
+| File | New Folder, New File, Rename, Open File |
+| Folder (non-root) | New Folder, New File, Rename, Open Folder |
+| Root folder / empty area | New Folder, New File, Open Folder |
+
+`New File` / `New Folder` create the entry inside the clicked folder (or the
+parent folder when a file was clicked). `Open File` opens the file in
+`$EDITOR`; `Open Folder` reveals the folder in the system file manager.
+
+Navigate with `↑` / `↓` (or `j` / `k` / `w` / `s`), activate with `Enter` or
+a left click, dismiss with `Esc` or a click outside the popup.
+
 ### Input prompt (new file / new folder / rename)
 
 | Key | Action |
 | --- | --- |
-| (type characters) | Edit name |
+| (type characters) | Insert at the cursor |
+| `←` / `Ctrl-b` | Move cursor left |
+| `→` / `Ctrl-f` | Move cursor right |
+| `Home` / `Ctrl-a` | Jump to start |
+| `End` / `Ctrl-e` | Jump to end |
+| `Backspace` | Delete character before cursor |
+| `Delete` | Delete character at cursor |
+| `Ctrl-w` | Delete word before cursor |
+| `Ctrl-u` | Delete from start to cursor |
 | `Enter` | Confirm |
-| `Backspace` | Delete one character |
-| `Ctrl-w` | Delete one word |
-| `Ctrl-u` | Clear input |
 | `Esc` / `Ctrl-c` | Cancel |
 
 ## Configuration

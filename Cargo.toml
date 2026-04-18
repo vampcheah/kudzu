@@ -13,21 +13,6 @@ anyhow = "1"
 nucleo = "0.5"
 ignore = "0.4"
 
-[dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "tree"
-harness = false
-
-[[bench]]
-name = "search"
-harness = false
-
-[[bench]]
-name = "comparison"
-harness = false
-
 [profile.release]
 lto = "thin"
 codegen-units = 1

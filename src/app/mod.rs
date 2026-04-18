@@ -271,23 +271,31 @@ where
     let events = EventLoop::new()?;
     let mut app = App::new(root, cfg, events.tx.clone())?;
 
+    // Initial draw.
+    terminal.draw(|f| ui::draw(f, &mut app))?;
+
     loop {
-        app.expire_status();
-        terminal.draw(|f| ui::draw(f, &mut app))?;
         if app.should_quit {
             break;
         }
 
-        let action = match events.rx.recv()? {
-            AppEvent::Input(CtEvent::Key(key)) => app.on_key(key)?,
-            AppEvent::Input(CtEvent::Mouse(m)) => app.on_mouse(m)?,
-            AppEvent::Input(CtEvent::Resize(_, _)) => Action::None,
-            AppEvent::Input(_) => Action::None,
+        // Returns true when a redraw is needed after processing.
+        let (action, needs_draw) = match events.rx.recv()? {
+            AppEvent::Input(CtEvent::Key(key)) => (app.on_key(key)?, true),
+            AppEvent::Input(CtEvent::Mouse(m)) => (app.on_mouse(m)?, true),
+            AppEvent::Input(CtEvent::Resize(_, _)) => (Action::None, true),
+            AppEvent::Input(_) => (Action::None, true),
             AppEvent::FsChanged(paths) => {
                 app.on_fs_changed(paths);
-                Action::None
+                (Action::None, true)
             }
-            AppEvent::Tick => Action::None,
+            AppEvent::Tick => {
+                // Tick only redraws when a flash status just expired.
+                let had_status = !app.status.is_empty();
+                app.expire_status();
+                let status_cleared = had_status && app.status.is_empty();
+                (Action::None, status_cleared)
+            }
         };
         app.drain_watch();
 
@@ -347,6 +355,10 @@ where
                 }
             }
             Action::RootChanged => {}
+        }
+
+        if needs_draw {
+            terminal.draw(|f| ui::draw(f, &mut app))?;
         }
     }
 

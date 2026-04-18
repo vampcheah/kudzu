@@ -26,6 +26,8 @@ impl Default for ScanOptions {
 pub struct Node {
     pub path: PathBuf,
     pub name: String,
+    /// Path relative to tree root, pre-computed for search matching.
+    pub rel_path: String,
     pub depth: usize,
     pub is_dir: bool,
     pub is_hidden: bool,
@@ -42,6 +44,10 @@ pub struct Tree {
     pub visible: Vec<usize>,
     pub opts: ScanOptions,
     watch_delta: WatchDelta,
+    /// children[i] holds the node indices whose parent == i, in insertion order.
+    children: Vec<Vec<usize>>,
+    /// O(1) lookup: path → node index.
+    path_index: HashMap<PathBuf, usize>,
 }
 
 /// Pending set of directories that should start / stop being watched.
@@ -63,6 +69,7 @@ impl Tree {
         let root_node = Node {
             path: root.clone(),
             name,
+            rel_path: String::new(),
             depth: 0,
             is_dir: true,
             is_hidden: false,
@@ -78,7 +85,10 @@ impl Tree {
             visible: vec![],
             opts,
             watch_delta: WatchDelta::default(),
+            children: vec![Vec::new()],
+            path_index: HashMap::new(),
         };
+        t.path_index.insert(t.nodes[0].path.clone(), 0);
         t.toggle_expand(0)?;
         Ok(t)
     }
@@ -106,13 +116,7 @@ impl Tree {
     }
 
     fn children_of(&self, idx: usize) -> Vec<usize> {
-        let mut out = Vec::new();
-        for (i, n) in self.nodes.iter().enumerate() {
-            if n.parent == Some(idx) {
-                out.push(i);
-            }
-        }
-        out
+        self.children[idx].clone()
     }
 
     pub fn toggle_expand(&mut self, idx: usize) -> Result<()> {
@@ -156,9 +160,19 @@ impl Tree {
         let parent_depth = self.nodes[idx].depth;
         let entries = read_children(&parent_path, &self.opts);
         for entry in entries {
+            let new_idx = self.nodes.len();
+            let rel_path = entry
+                .path
+                .strip_prefix(&self.root)
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| entry.name.clone());
+            self.path_index.insert(entry.path.clone(), new_idx);
+            self.children.push(Vec::new());
+            self.children[idx].push(new_idx);
             self.nodes.push(Node {
                 path: entry.path,
                 name: entry.name,
+                rel_path,
                 depth: parent_depth + 1,
                 is_dir: entry.is_dir,
                 is_hidden: entry.is_hidden,
@@ -245,11 +259,9 @@ impl Tree {
         let mut out = Vec::new();
         let mut stack = vec![idx];
         while let Some(i) = stack.pop() {
-            for (j, n) in self.nodes.iter().enumerate() {
-                if n.parent == Some(i) {
-                    out.push(j);
-                    stack.push(j);
-                }
+            for c in self.children_of(i) {
+                out.push(c);
+                stack.push(c);
             }
         }
         out
@@ -271,11 +283,30 @@ impl Tree {
         for n in &mut new_nodes {
             n.parent = n.parent.and_then(|p| index_map.get(&p).copied());
         }
+
+        // Rebuild children index from remapped parent refs (children added in
+        // ascending new-index order, preserving original sibling ordering).
+        let mut new_children: Vec<Vec<usize>> = vec![Vec::new(); new_nodes.len()];
+        for (new_i, n) in new_nodes.iter().enumerate() {
+            if let Some(parent_i) = n.parent {
+                new_children[parent_i].push(new_i);
+            }
+        }
+
+        // Rebuild path index.
+        let mut new_path_index: HashMap<PathBuf, usize> =
+            HashMap::with_capacity(new_nodes.len());
+        for (new_i, n) in new_nodes.iter().enumerate() {
+            new_path_index.insert(n.path.clone(), new_i);
+        }
+
         self.nodes = new_nodes;
+        self.children = new_children;
+        self.path_index = new_path_index;
     }
 
     pub fn find_by_path(&self, path: &Path) -> Option<usize> {
-        self.nodes.iter().position(|n| n.path == path)
+        self.path_index.get(path).copied()
     }
 
     pub fn rebuild_visible(&mut self) {
@@ -446,6 +477,50 @@ mod tests {
         tree.refresh_dir(&root).unwrap();
         assert!(tree.find_by_path(&root.join("sub/deep.txt")).is_some());
         assert!(tree.find_by_path(&root.join("sibling.txt")).is_some());
+    }
+
+    #[test]
+    fn children_index_consistency() {
+        let root = tmp("index");
+        fs::create_dir(root.join("a")).unwrap();
+        fs::create_dir(root.join("b")).unwrap();
+        fs::write(root.join("a/x.txt"), "").unwrap();
+        fs::write(root.join("b/y.txt"), "").unwrap();
+        fs::write(root.join("top.txt"), "").unwrap();
+
+        let mut tree = Tree::new(root.clone(), ScanOptions::default()).unwrap();
+        let a = tree.find_by_path(&root.join("a")).unwrap();
+        let b = tree.find_by_path(&root.join("b")).unwrap();
+        tree.toggle_expand(a).unwrap();
+        tree.toggle_expand(b).unwrap();
+        // Add a new file and refresh to exercise remove_nodes path.
+        fs::write(root.join("new.txt"), "").unwrap();
+        tree.refresh_dir(&root).unwrap();
+
+        // Invariant 1: children and nodes have the same length.
+        assert_eq!(tree.children.len(), tree.nodes.len());
+        // Invariant 2: path_index covers every node exactly once.
+        assert_eq!(tree.path_index.len(), tree.nodes.len());
+        // Invariant 3: children[i] ↔ parent refs are mutually consistent.
+        for (i, node) in tree.nodes.iter().enumerate() {
+            if let Some(parent) = node.parent {
+                assert!(
+                    tree.children[parent].contains(&i),
+                    "node {i} has parent {parent} but is not in children[{parent}]"
+                );
+            }
+            for &child in &tree.children[i] {
+                assert_eq!(
+                    tree.nodes[child].parent,
+                    Some(i),
+                    "children[{i}] contains {child} but nodes[{child}].parent != Some({i})"
+                );
+            }
+        }
+        // Invariant 4: path_index values are consistent with nodes.
+        for (path, &idx) in &tree.path_index {
+            assert_eq!(&tree.nodes[idx].path, path);
+        }
     }
 
     #[test]

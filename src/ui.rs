@@ -1,4 +1,6 @@
 
+use std::sync::OnceLock;
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -164,7 +166,7 @@ fn draw_search(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|(offset, m)| {
             let row = scroll + offset;
             let node = &app.tree.nodes[m.node];
-            render_search_row(node, &app.tree.root, row == selected, &m.indices)
+            render_search_row(node, &m.parent_rel, row == selected, &m.indices)
         })
         .collect();
 
@@ -220,28 +222,21 @@ fn render_tree_row(node: &Node, selected: bool, highlight: &[u32]) -> ListItem<'
 
 fn render_search_row(
     node: &Node,
-    root: &std::path::Path,
+    parent_rel: &str,
     selected: bool,
     highlight: &[u32],
 ) -> ListItem<'static> {
     let icon = if node.is_dir { "▶ " } else { "  " };
     let base_style = base_style_for(node);
-    let rel = node
-        .path
-        .strip_prefix(root)
-        .ok()
-        .and_then(|p| p.parent())
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
     let mut spans = vec![Span::raw(icon)];
     spans.extend(highlighted_name(&node.name, highlight, base_style));
     if node.is_dir {
         spans.push(Span::styled("/", base_style));
     }
-    if !rel.is_empty() {
+    if !parent_rel.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(
-            format!("in {}", rel),
+            format!("in {}", parent_rel),
             Style::default().fg(HIDDEN_FG),
         ));
     }
@@ -269,16 +264,18 @@ fn highlighted_name(name: &str, indices: &[u32], base: Style) -> Vec<Span<'stati
     if indices.is_empty() {
         return vec![Span::styled(name.to_string(), base)];
     }
-    let mut set = std::collections::HashSet::new();
-    for &i in indices {
-        set.insert(i as usize);
-    }
+    // indices are sorted ascending (nucleo guarantee); walk with a pointer
+    // instead of building a HashSet.
     let hl = base.fg(MATCH_FG).add_modifier(Modifier::BOLD);
     let mut spans = Vec::new();
     let mut cur = String::new();
     let mut cur_hl = false;
+    let mut idx_pos = 0usize;
     for (i, c) in name.chars().enumerate() {
-        let is_hl = set.contains(&i);
+        let is_hl = idx_pos < indices.len() && indices[idx_pos] as usize == i;
+        if is_hl {
+            idx_pos += 1;
+        }
         if is_hl != cur_hl && !cur.is_empty() {
             spans.push(Span::styled(
                 std::mem::take(&mut cur),
@@ -501,23 +498,25 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
         Line::from(spans)
     };
 
-    // Compute popup dimensions — use the widest across ALL pages so it doesn't
-    // jump when switching tabs.
-    let max_content_width = HELP_PAGES
-        .iter()
-        .flat_map(|p| p.rows.iter())
-        .map(|(k, desc)| {
-            let key_w = HELP_PAGES
-                .iter()
-                .flat_map(|p| p.rows.iter())
-                .map(|(k2, _)| k2.chars().count())
-                .max()
-                .unwrap_or(0);
-            let pad = key_w.saturating_sub(k.chars().count());
-            1 + k.chars().count() + pad + 2 + desc.chars().count()
-        })
-        .max()
-        .unwrap_or(40) as u16;
+    // Compute popup dimensions once; HELP_PAGES is 'static so the result never changes.
+    static MAX_CONTENT_WIDTH: OnceLock<u16> = OnceLock::new();
+    let max_content_width = *MAX_CONTENT_WIDTH.get_or_init(|| {
+        let key_w = HELP_PAGES
+            .iter()
+            .flat_map(|p| p.rows.iter())
+            .map(|(k, _)| k.chars().count())
+            .max()
+            .unwrap_or(0);
+        HELP_PAGES
+            .iter()
+            .flat_map(|p| p.rows.iter())
+            .map(|(k, desc)| {
+                let pad = key_w.saturating_sub(k.chars().count());
+                (1 + k.chars().count() + pad + 2 + desc.chars().count()) as u16
+            })
+            .max()
+            .unwrap_or(40)
+    });
 
     let tab_bar_width = tab_bar.width() as u16;
     let inner_width = max_content_width.max(tab_bar_width) + 2;

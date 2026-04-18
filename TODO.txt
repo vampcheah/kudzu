@@ -1,7 +1,0 @@
-- right click context menu [done]
-	- new folder           [done, bound to `N` + menu "New Folder"]
-	- new file             [done, bound to `n` + menu "New File"]
-	- open folder          [done, bound to `M` + menu "Open Folder"]
-	- open file            [done, bound to `o` + menu "Open File"]
-	- rename folder/file   [done, bound to `R` + menu "Rename"]
-	- delete folder/file   [done, bound to `D` (confirm y)]

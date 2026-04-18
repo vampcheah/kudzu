@@ -137,17 +137,8 @@ impl Tree {
     }
 
     pub fn expand(&mut self, idx: usize) -> Result<()> {
-        if !self.nodes[idx].is_dir {
-            return Ok(());
-        }
-        if !self.nodes[idx].children_loaded {
-            self.load_children(idx)?;
-        }
-        if !self.nodes[idx].expanded {
-            self.nodes[idx].expanded = true;
-            let watched = self.collect_watched_subtree(idx);
-            self.watch_delta.added.extend(watched);
-            self.rebuild_visible();
+        if self.nodes[idx].is_dir && !self.nodes[idx].expanded {
+            self.toggle_expand(idx)?;
         }
         Ok(())
     }

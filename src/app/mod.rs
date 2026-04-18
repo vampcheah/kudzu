@@ -8,8 +8,8 @@ pub use prompt::{Prompt, PromptKind};
 
 use std::{
     env, io,
-    path::PathBuf,
-    process::Command,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -113,6 +113,18 @@ impl App {
         apply_watch_delta(&mut self.watcher, delta);
     }
 
+    fn replace_root(&mut self, new_root: PathBuf) -> Result<()> {
+        let opts = self.tree.opts;
+        self.watcher.unwatch_all();
+        self.tree = Tree::new(new_root, opts)?;
+        self.drain_watch();
+        self.scroll = 0;
+        if self.mode == Mode::Search {
+            self.exit_search();
+        }
+        Ok(())
+    }
+
     /// Replace the tree root with its parent directory.
     pub(super) fn ascend_root(&mut self) -> Result<Option<PathBuf>> {
         let parent = match self.tree.root.parent() {
@@ -121,21 +133,14 @@ impl App {
             }
             _ => return Ok(None),
         };
-        let opts = self.tree.opts;
         let prev_root = self.tree.root.clone();
-        self.watcher.unwatch_all();
-        self.tree = Tree::new(parent.clone(), opts)?;
-        self.drain_watch();
+        self.replace_root(parent.clone())?;
         if let Some(prev_idx) = self.tree.find_by_path(&prev_root) {
             if let Some(pos) = self.tree.visible.iter().position(|&i| i == prev_idx) {
                 self.selected = pos;
             }
         } else {
             self.selected = 0;
-        }
-        self.scroll = 0;
-        if self.mode == Mode::Search {
-            self.exit_search();
         }
         Ok(Some(parent))
     }
@@ -150,15 +155,8 @@ impl App {
             return Ok(None);
         }
         let new_root = self.tree.nodes[idx].path.clone();
-        let opts = self.tree.opts;
-        self.watcher.unwatch_all();
-        self.tree = Tree::new(new_root.clone(), opts)?;
-        self.drain_watch();
+        self.replace_root(new_root.clone())?;
         self.selected = 0;
-        self.scroll = 0;
-        if self.mode == Mode::Search {
-            self.exit_search();
-        }
         Ok(Some(new_root))
     }
 
@@ -309,20 +307,12 @@ where
         app.drain_watch();
 
         match action {
-            Action::None => {}
+            Action::None | Action::RootChanged => {}
             Action::OpenInEditor(path) => {
                 if is_image(&path) {
-                    let (bin, extra) = split_command(&app.cfg.gui_editor);
-                    match Command::new(&bin)
-                        .args(&extra)
-                        .arg(&path)
-                        .stdin(std::process::Stdio::null())
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn()
-                    {
-                        Ok(_) => app.flash(format!("image → opened in {}", bin)),
-                        Err(e) => app.flash(format!("{}: {}", bin, e)),
+                    match spawn_detached(&app.cfg.gui_editor, &path) {
+                        Ok(bin) => app.flash(format!("image → opened in {}", bin)),
+                        Err(e) => app.flash(format!("{}", e)),
                     }
                 } else {
                     suspend_and_run(terminal, |_| {
@@ -336,34 +326,17 @@ where
                 }
             }
             Action::OpenInGui(path) => {
-                let (bin, extra) = split_command(&app.cfg.gui_editor);
-                match Command::new(&bin)
-                    .args(&extra)
-                    .arg(&path)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                {
-                    Ok(_) => app.flash(format!("opened {} in {}", path.display(), bin)),
-                    Err(e) => app.flash(format!("{}: {}", bin, e)),
+                match spawn_detached(&app.cfg.gui_editor, &path) {
+                    Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
+                    Err(e) => app.flash(format!("{}", e)),
                 }
             }
             Action::OpenInFileManager(path) => {
-                let (bin, extra) = split_command(&app.cfg.file_manager);
-                match Command::new(&bin)
-                    .args(&extra)
-                    .arg(&path)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .spawn()
-                {
-                    Ok(_) => app.flash(format!("opened {} in {}", path.display(), bin)),
-                    Err(e) => app.flash(format!("{}: {}", bin, e)),
+                match spawn_detached(&app.cfg.file_manager, &path) {
+                    Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
+                    Err(e) => app.flash(format!("{}", e)),
                 }
             }
-            Action::RootChanged => {}
         }
 
         if needs_draw {
@@ -372,6 +345,21 @@ where
     }
 
     Ok(())
+}
+
+/// Spawn a detached process with all stdio connected to /dev/null.
+/// Returns the binary name on success or a `"bin: err"` string on failure.
+fn spawn_detached(cmd: &str, path: &Path) -> Result<String, String> {
+    let (bin, extra) = split_command(cmd);
+    Command::new(&bin)
+        .args(&extra)
+        .arg(path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| bin.clone())
+        .map_err(|e| format!("{}: {}", bin, e))
 }
 
 fn is_image(path: &std::path::Path) -> bool {
@@ -387,10 +375,8 @@ fn is_image(path: &std::path::Path) -> bool {
 }
 
 fn apply_watch_delta(watcher: &mut FsWatcher, delta: WatchDelta) {
-    use std::collections::HashSet;
-    let added_set: HashSet<&PathBuf> = delta.added.iter().collect();
     for p in &delta.removed {
-        if !added_set.contains(p) {
+        if !delta.added.contains(p) {
             watcher.unwatch_dir(p);
         }
     }

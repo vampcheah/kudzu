@@ -24,28 +24,17 @@ impl App {
     }
 
     pub(super) fn start_new_file(&mut self) {
-        match self.target_dir() {
-            Some(dir) => {
-                self.input = Some(Prompt {
-                    kind: PromptKind::NewFile,
-                    buffer: String::new(),
-                    cursor: 0,
-                    target: dir,
-                });
-            }
-            None => self.flash("no target directory"),
-        }
+        self.start_new(PromptKind::NewFile);
     }
 
     pub(super) fn start_new_folder(&mut self) {
+        self.start_new(PromptKind::NewFolder);
+    }
+
+    fn start_new(&mut self, kind: PromptKind) {
         match self.target_dir() {
             Some(dir) => {
-                self.input = Some(Prompt {
-                    kind: PromptKind::NewFolder,
-                    buffer: String::new(),
-                    cursor: 0,
-                    target: dir,
-                });
+                self.input = Some(Prompt { kind, buffer: String::new(), cursor: 0, target: dir });
             }
             None => self.flash("no target directory"),
         }
@@ -124,37 +113,22 @@ impl App {
             }
             return Ok(Action::None);
         }
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Esc => self.cancel_prompt(),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cancel_prompt()
+            KeyCode::Esc | KeyCode::Char('c') if ctrl || key.code == KeyCode::Esc => {
+                self.cancel_prompt();
+                return Ok(Action::None);
             }
             KeyCode::Enter => return self.confirm_prompt(),
-            KeyCode::Left => self.input.as_mut().unwrap().move_left(),
-            KeyCode::Right => self.input.as_mut().unwrap().move_right(),
-            KeyCode::Home => self.input.as_mut().unwrap().move_home(),
-            KeyCode::End => self.input.as_mut().unwrap().move_end(),
-            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.as_mut().unwrap().move_home()
-            }
-            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.as_mut().unwrap().move_end()
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.as_mut().unwrap().move_left()
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.as_mut().unwrap().move_right()
-            }
-            KeyCode::Backspace => self.input.as_mut().unwrap().delete_before(),
-            KeyCode::Delete => self.input.as_mut().unwrap().delete_at(),
-            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.as_mut().unwrap().delete_word_before()
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.as_mut().unwrap().kill_to_start()
-            }
-            KeyCode::Char(c) => self.input.as_mut().unwrap().insert_char(c),
+            KeyCode::Left | KeyCode::Char('b') if key.code == KeyCode::Left || ctrl => prompt.move_left(),
+            KeyCode::Right | KeyCode::Char('f') if key.code == KeyCode::Right || ctrl => prompt.move_right(),
+            KeyCode::Home | KeyCode::Char('a') if key.code == KeyCode::Home || ctrl => prompt.move_home(),
+            KeyCode::End | KeyCode::Char('e') if key.code == KeyCode::End || ctrl => prompt.move_end(),
+            KeyCode::Backspace => prompt.delete_before(),
+            KeyCode::Delete => prompt.delete_at(),
+            KeyCode::Char('w') if ctrl => prompt.delete_word_before(),
+            KeyCode::Char('u') if ctrl => prompt.kill_to_start(),
+            KeyCode::Char(c) => prompt.insert_char(c),
             _ => {}
         }
         Ok(Action::None)
@@ -214,13 +188,7 @@ impl App {
                         return Ok(Action::None);
                     }
                 };
-                if name
-                    == prompt
-                        .target
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default()
-                {
+                if prompt.target.file_name().map(|s| s == name.as_str()).unwrap_or(false) {
                     return Ok(Action::None);
                 }
                 let new_path = parent.join(&name);

@@ -204,68 +204,53 @@ fn render_tree_row<'a>(node: &'a Node, selected: bool, highlight: &[u32]) -> Lis
     } else {
         "  "
     };
-    let base_style = base_style_for(node);
-    let name_spans = highlighted_name(&node.name, highlight, base_style);
+    let bs = base_style(node.is_dir, node.is_hidden, node.is_symlink);
     let mut spans: Vec<Span<'a>> = vec![Span::raw(indent), Span::raw(icon)];
-    spans.extend(name_spans);
+    spans.extend(highlighted_name(&node.name, highlight, bs));
     if node.is_dir {
-        spans.push(Span::styled("/", base_style));
+        spans.push(Span::styled("/", bs));
     }
     if node.is_symlink {
         spans.push(Span::styled(" →", Style::default().fg(SYMLINK_FG)));
     }
-    let line = Line::from(spans);
-    let item_style = if selected {
-        Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-    };
-    ListItem::new(line).style(item_style)
+    finish_row(spans, selected)
 }
 
 fn render_search_row<'a>(m: &'a SearchMatch, selected: bool) -> ListItem<'a> {
     let icon: &'static str = if m.is_dir { "▶ " } else { "  " };
-    let base_style = base_style_for_match(m);
+    let bs = base_style(m.is_dir, m.is_hidden, m.is_symlink);
     let mut spans: Vec<Span<'a>> = vec![Span::raw(icon)];
-    spans.extend(highlighted_name(&m.name, &m.indices, base_style));
+    spans.extend(highlighted_name(&m.name, &m.indices, bs));
     if m.is_dir {
-        spans.push(Span::styled("/", base_style));
+        spans.push(Span::styled("/", bs));
     }
     if !m.parent_rel.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::raw("in "));
         spans.push(Span::styled(m.parent_rel.as_str(), Style::default().fg(HIDDEN_FG)));
     }
+    finish_row(spans, selected)
+}
+
+fn base_style(is_dir: bool, is_hidden: bool, is_symlink: bool) -> Style {
+    let mut s = Style::default();
+    if is_symlink {
+        s = s.fg(SYMLINK_FG);
+    } else if is_dir {
+        s = s.fg(DIR_FG).add_modifier(Modifier::BOLD);
+    } else if is_hidden {
+        s = s.fg(HIDDEN_FG);
+    }
+    s
+}
+
+fn finish_row(spans: Vec<Span<'_>>, selected: bool) -> ListItem<'_> {
     let item_style = if selected {
         Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
     ListItem::new(Line::from(spans)).style(item_style)
-}
-
-fn base_style_for(node: &Node) -> Style {
-    let mut s = Style::default();
-    if node.is_symlink {
-        s = s.fg(SYMLINK_FG);
-    } else if node.is_dir {
-        s = s.fg(DIR_FG).add_modifier(Modifier::BOLD);
-    } else if node.is_hidden {
-        s = s.fg(HIDDEN_FG);
-    }
-    s
-}
-
-fn base_style_for_match(m: &SearchMatch) -> Style {
-    let mut s = Style::default();
-    if m.is_symlink {
-        s = s.fg(SYMLINK_FG);
-    } else if m.is_dir {
-        s = s.fg(DIR_FG).add_modifier(Modifier::BOLD);
-    } else if m.is_hidden {
-        s = s.fg(HIDDEN_FG);
-    }
-    s
 }
 
 fn highlighted_name<'a>(name: &'a str, indices: &[u32], base: Style) -> Vec<Span<'a>> {

@@ -148,9 +148,17 @@ impl Search {
     pub fn set_query(&mut self, new_query: &str) {
         let append = new_query.starts_with(self.query.as_str());
         self.query = new_query.to_string();
-        self.nucleo.pattern.reparse(0, new_query, CaseMatching::Smart, Normalization::Smart, append);
-        self.nucleo.pattern.reparse(1, new_query, CaseMatching::Smart, Normalization::Smart, append);
+        for col in 0..2 {
+            self.nucleo.pattern.reparse(col, new_query, CaseMatching::Smart, Normalization::Smart, append);
+        }
         self.selected = 0;
+    }
+
+    /// Modify the current query in-place without an extra clone.
+    pub fn mutate_query(&mut self, f: impl FnOnce(&mut String)) {
+        let mut q = std::mem::take(&mut self.query);
+        f(&mut q);
+        self.set_query(&q);
     }
 
     /// Drive the nucleo worker for up to 10ms; returns true if the snapshot changed.

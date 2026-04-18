@@ -34,25 +34,12 @@ impl App {
                     self.selected = self.tree.visible.len() - 1;
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => {
                 if let Some(idx) = self.selected_node() {
                     if self.tree.nodes[idx].is_dir {
-                        self.tree.toggle_expand(idx)?;
-                        if let Some(pos) = self.tree.visible.iter().position(|&i| i == idx) {
-                            self.selected = pos;
-                        }
-                    } else {
+                        self.toggle_and_reselect(idx)?;
+                    } else if key.code == KeyCode::Enter {
                         return Ok(Action::OpenInEditor(self.tree.nodes[idx].path.clone()));
-                    }
-                }
-            }
-            KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => {
-                if let Some(idx) = self.selected_node() {
-                    if self.tree.nodes[idx].is_dir {
-                        self.tree.toggle_expand(idx)?;
-                        if let Some(pos) = self.tree.visible.iter().position(|&i| i == idx) {
-                            self.selected = pos;
-                        }
                     }
                 }
             }
@@ -67,10 +54,7 @@ impl App {
                             None => self.flash("already at filesystem root"),
                         }
                     } else if self.tree.nodes[idx].is_dir && self.tree.nodes[idx].expanded {
-                        self.tree.toggle_expand(idx)?;
-                        if let Some(pos) = self.tree.visible.iter().position(|&i| i == idx) {
-                            self.selected = pos;
-                        }
+                        self.toggle_and_reselect(idx)?;
                     } else if let Some(parent) = self.tree.nodes[idx].parent {
                         if let Some(pos) = self.tree.visible.iter().position(|&i| i == parent) {
                             self.selected = pos;
@@ -158,29 +142,17 @@ impl App {
             KeyCode::Up => self.search.move_selection(-1),
             KeyCode::PageDown => self.search.move_selection(10),
             KeyCode::PageUp => self.search.move_selection(-10),
-            KeyCode::Backspace => {
-                let mut q = self.search.query.clone();
-                q.pop();
-                self.search.set_query(&q);
-            }
+            KeyCode::Backspace => self.search.mutate_query(|q| { q.pop(); }),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.exit_search()
             }
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let mut q = self.search.query.clone();
-                while matches!(q.chars().last(), Some(c) if c.is_whitespace()) {
-                    q.pop();
-                }
-                while matches!(q.chars().last(), Some(c) if !c.is_whitespace()) {
-                    q.pop();
-                }
-                self.search.set_query(&q);
+                self.search.mutate_query(|q| {
+                    while matches!(q.chars().last(), Some(c) if c.is_whitespace()) { q.pop(); }
+                    while matches!(q.chars().last(), Some(c) if !c.is_whitespace()) { q.pop(); }
+                });
             }
-            KeyCode::Char(c) => {
-                let mut q = self.search.query.clone();
-                q.push(c);
-                self.search.set_query(&q);
-            }
+            KeyCode::Char(c) => self.search.mutate_query(|q| q.push(c)),
             _ => {}
         }
         Ok(Action::None)
@@ -296,6 +268,14 @@ impl App {
         }
     }
 
+    fn toggle_and_reselect(&mut self, idx: usize) -> Result<()> {
+        self.tree.toggle_expand(idx)?;
+        if let Some(pos) = self.tree.visible.iter().position(|&i| i == idx) {
+            self.selected = pos;
+        }
+        Ok(())
+    }
+
     /// Activate handler for double-click. Files honor `cfg.double_click`;
     /// directories always toggle expansion (matching the normal Enter flow).
     pub(super) fn activate_selected(&mut self) -> Result<Action> {
@@ -309,10 +289,7 @@ impl App {
             Mode::Normal => {
                 if let Some(idx) = self.selected_node() {
                     if self.tree.nodes[idx].is_dir {
-                        self.tree.toggle_expand(idx)?;
-                        if let Some(pos) = self.tree.visible.iter().position(|&i| i == idx) {
-                            self.selected = pos;
-                        }
+                        self.toggle_and_reselect(idx)?;
                     } else {
                         return Ok(file_action(
                             self.tree.nodes[idx].path.clone(),

@@ -112,23 +112,10 @@ impl App {
         target: Option<usize>,
     ) -> Result<Action> {
         match item {
-            MenuItem::NewFile => {
+            MenuItem::NewFile | MenuItem::NewFolder => {
+                let kind = if item == MenuItem::NewFile { PromptKind::NewFile } else { PromptKind::NewFolder };
                 let dir = self.menu_target_dir(target);
-                self.input = Some(Prompt {
-                    kind: PromptKind::NewFile,
-                    buffer: String::new(),
-                    cursor: 0,
-                    target: dir,
-                });
-            }
-            MenuItem::NewFolder => {
-                let dir = self.menu_target_dir(target);
-                self.input = Some(Prompt {
-                    kind: PromptKind::NewFolder,
-                    buffer: String::new(),
-                    cursor: 0,
-                    target: dir,
-                });
+                self.input = Some(Prompt { kind, buffer: String::new(), cursor: 0, target: dir });
             }
             MenuItem::Rename => {
                 if let Some(idx) = target {

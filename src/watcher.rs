@@ -70,8 +70,7 @@ impl FsWatcher {
 
     /// Drop every active watch. Used when swapping the tree root.
     pub fn unwatch_all(&mut self) {
-        let paths: Vec<PathBuf> = self.watching.drain().collect();
-        for p in paths {
+        for p in std::mem::take(&mut self.watching) {
             let _ = self.debouncer.watcher().unwatch(&p);
         }
     }

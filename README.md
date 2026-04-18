@@ -4,6 +4,17 @@ A lightweight terminal file browser (TUI) written in Rust, built on [ratatui](ht
 
 Keyboard-driven, fuzzy search, respects `.gitignore`, auto-refreshes on filesystem changes — ideal for quickly locating and opening project files from the terminal.
 
+## Who is this for?
+
+kudzu is a good fit if you:
+
+- Live in the terminal and want a file browser that doesn't make you leave it
+- Use `$EDITOR` (vim, neovim, nano, etc.) and want to open files without typing full paths
+- Work on large codebases and need fast fuzzy search across thousands of files
+- Prefer keyboard-driven tools but still want optional mouse support
+
+It is probably **not** what you want if you need a full-featured file manager (bulk operations, archives, remote filesystems, previews) — reach for `ranger`, `nnn`, or `yazi` instead.
+
 ## Features
 
 - 🌲 Expandable/collapsible tree view
@@ -21,7 +32,7 @@ After installing via any method below, both `kudzu` and the short alias `kz` wor
 ### Linux / macOS (one-shot, recommended)
 
 ```bash
-git clone https://github.com/<your-user>/kudzu.git
+git clone https://github.com/vampcheah/kudzu.git
 cd kudzu
 sudo make install            # installs to /usr/local/bin by default, creates kz symlink
 # Or install to your home directory without sudo (make sure $HOME/.local/bin is in PATH):
@@ -37,7 +48,7 @@ sudo make uninstall          # or PREFIX=$HOME/.local make uninstall
 ### Windows (PowerShell one-shot)
 
 ```powershell
-git clone https://github.com/<your-user>/kudzu.git
+git clone https://github.com/vampcheah/kudzu.git
 cd kudzu
 .\install.ps1                # installs to %LOCALAPPDATA%\Programs\kudzu and adds it to user PATH
 .\install.ps1 -Uninstall     # uninstall
@@ -85,14 +96,14 @@ To ship a binary that runs on other Linux machines without requiring Rust or mat
 rustup target add x86_64-unknown-linux-musl
 cargo build --release --target x86_64-unknown-linux-musl
 strip target/x86_64-unknown-linux-musl/release/kudzu           # optional: smaller binary
-tar czf kudzu-1.0.0-x86_64-linux.tar.gz \
+tar czf kudzu-1.1.0-x86_64-linux.tar.gz \
     -C target/x86_64-unknown-linux-musl/release kudzu
 ```
 
 On the target machine:
 
 ```bash
-tar xzf kudzu-1.0.0-x86_64-linux.tar.gz
+tar xzf kudzu-1.1.0-x86_64-linux.tar.gz
 sudo install -m 0755 kudzu /usr/local/bin/kudzu
 sudo ln -sf kudzu /usr/local/bin/kz         # optional
 ```

@@ -21,7 +21,7 @@ use ratatui::{
 };
 
 use crate::{
-    app::{App, ContextMenu, Mode, PromptKind},
+    app::{App, Mode, PromptKind},
     search::SearchMatch,
     tree::Node,
 };
@@ -60,8 +60,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 fn draw_context_menu(f: &mut Frame, app: &mut App, area: Rect) {
-    let menu: ContextMenu = match &app.menu {
-        Some(m) => m.clone(),
+    let menu = match app.menu.as_ref() {
+        Some(m) => m,
         None => return,
     };
     let max_label = menu
@@ -112,13 +112,15 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Mode::Search => " SEARCH ",
     };
     let mode_style = Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD);
-    let root = app.tree.root.display().to_string();
+    let root_cow = app.tree.root.to_str()
+        .map(std::borrow::Cow::Borrowed)
+        .unwrap_or_else(|| std::borrow::Cow::Owned(app.tree.root.display().to_string()));
     let spans = vec![
         Span::styled(mode_text, mode_style),
         Span::raw(" "),
         Span::styled("kudzu", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::raw(" · "),
-        Span::raw(root),
+        Span::raw(root_cow),
     ];
     let p = Paragraph::new(Line::from(spans));
     f.render_widget(p, area);
@@ -325,7 +327,7 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
         Mode::Search => {
             let line = Line::from(vec![
                 Span::styled("/ ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
-                Span::raw(app.search.query.clone()),
+                Span::raw(app.search.query.as_str()),
                 Span::styled("▏", Style::default().fg(ACCENT)),
             ]);
             f.render_widget(Paragraph::new(line), area);

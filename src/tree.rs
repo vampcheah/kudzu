@@ -318,15 +318,13 @@ impl Tree {
 
     pub fn rebuild_visible(&mut self) {
         self.visible.clear();
-        self.walk_visible(0);
-    }
-
-    fn walk_visible(&mut self, idx: usize) {
-        self.visible.push(idx);
-        if self.nodes[idx].expanded {
-            let kids: Vec<usize> = self.children[idx].clone();
-            for c in kids {
-                self.walk_visible(c);
+        let mut stack = vec![0usize];
+        while let Some(idx) = stack.pop() {
+            self.visible.push(idx);
+            if self.nodes[idx].expanded {
+                for &c in self.children[idx].iter().rev() {
+                    stack.push(c);
+                }
             }
         }
     }

@@ -329,25 +329,6 @@ impl Tree {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn load_all(&mut self, limit: usize) -> Result<()> {
-        let mut queue: Vec<usize> = vec![0];
-        while let Some(i) = queue.pop() {
-            if self.nodes.len() >= limit {
-                break;
-            }
-            if self.nodes[i].is_dir && !self.nodes[i].children_loaded {
-                self.load_children(i)?;
-            }
-            for &c in self.children_of(i) {
-                if self.nodes[c].is_dir {
-                    queue.push(c);
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Recompute everything from scratch when options change.
     pub fn rescan(&mut self) -> Result<()> {
         // Capture which paths were expanded (also the set of currently-watched

@@ -54,7 +54,7 @@ fn bench_tick_after_index(c: &mut Criterion) {
                     // Simulate the main loop: set query, tick, count results.
                     s.set_query(q);
                     s.tick();
-                    criterion::black_box(s.matched_count());
+                    criterion::black_box(s.matches.len());
                 });
             },
         );

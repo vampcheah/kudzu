@@ -26,8 +26,6 @@ impl Default for ScanOptions {
 pub struct Node {
     pub path: PathBuf,
     pub name: String,
-    /// Path relative to tree root, pre-computed for search matching.
-    pub rel_path: String,
     pub depth: usize,
     pub is_dir: bool,
     pub is_hidden: bool,
@@ -69,7 +67,6 @@ impl Tree {
         let root_node = Node {
             path: root.clone(),
             name,
-            rel_path: String::new(),
             depth: 0,
             is_dir: true,
             is_hidden: false,
@@ -161,18 +158,12 @@ impl Tree {
         let entries = read_children(&parent_path, &self.opts);
         for entry in entries {
             let new_idx = self.nodes.len();
-            let rel_path = entry
-                .path
-                .strip_prefix(&self.root)
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|_| entry.name.clone());
             self.path_index.insert(entry.path.clone(), new_idx);
             self.children.push(Vec::new());
             self.children[idx].push(new_idx);
             self.nodes.push(Node {
                 path: entry.path,
                 name: entry.name,
-                rel_path,
                 depth: parent_depth + 1,
                 is_dir: entry.is_dir,
                 is_hidden: entry.is_hidden,
@@ -349,9 +340,7 @@ impl Tree {
         }
     }
 
-    /// Eagerly load children for every reachable directory, up to `limit`
-    /// total nodes. Used when entering search mode so the matcher has a
-    /// real pool to work with.
+    #[allow(dead_code)]
     pub fn load_all(&mut self, limit: usize) -> Result<()> {
         let mut queue: Vec<usize> = vec![0];
         while let Some(i) = queue.pop() {

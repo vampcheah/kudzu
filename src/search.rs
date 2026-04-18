@@ -162,10 +162,6 @@ impl Search {
         changed
     }
 
-    pub fn matched_count(&self) -> usize {
-        self.matches.len()
-    }
-
     pub fn selected_match(&self) -> Option<&SearchMatch> {
         self.matches.get(self.selected)
     }
@@ -269,7 +265,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             s.tick();
-            if s.matched_count() > 0 {
+            if s.matches.len() > 0 {
                 break;
             }
             if Instant::now() > deadline {
@@ -277,7 +273,7 @@ mod tests {
             }
             let _ = rx.recv_timeout(Duration::from_millis(10));
         }
-        assert!(s.matched_count() > 0, "should find widget.rs");
+        assert!(s.matches.len() > 0, "should find widget.rs");
         let m = s.selected_match().expect("should have a selection");
         assert!(m.path.ends_with("widget.rs"));
     }
@@ -286,6 +282,6 @@ mod tests {
     fn empty_query_yields_no_matches() {
         let (tx, _rx) = unbounded::<AppEvent>();
         let s = Search::new(tx);
-        assert_eq!(s.matched_count(), 0);
+        assert_eq!(s.matches.len(), 0);
     }
 }

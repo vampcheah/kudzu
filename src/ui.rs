@@ -1,6 +1,17 @@
 
 use std::sync::OnceLock;
 
+static INDENT_CACHE: OnceLock<Vec<&'static str>> = OnceLock::new();
+
+fn get_indent(depth: usize) -> &'static str {
+    let cache = INDENT_CACHE.get_or_init(|| {
+        (0..64usize)
+            .map(|n| -> &'static str { Box::leak("  ".repeat(n).into_boxed_str()) })
+            .collect()
+    });
+    cache.get(depth.min(63)).copied().unwrap_or("")
+}
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -11,6 +22,7 @@ use ratatui::{
 
 use crate::{
     app::{App, ContextMenu, Mode, PromptKind},
+    search::SearchMatch,
     tree::Node,
 };
 
@@ -153,8 +165,6 @@ fn draw_search(f: &mut Frame, app: &mut App, area: Rect) {
     let inner_height = area.height.saturating_sub(2) as usize;
     let height = inner_height.max(1);
 
-    // Scroll follows selection within matches.
-    // We don't persist scroll across mode changes; fine for search.
     let selected = app.search.selected;
     let scroll = selected.saturating_sub(height / 2);
     let total = app.search.matches.len();
@@ -163,19 +173,16 @@ fn draw_search(f: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = app.search.matches[scroll..end]
         .iter()
         .enumerate()
-        .map(|(offset, m)| {
-            let row = scroll + offset;
-            let node = &app.tree.nodes[m.node];
-            render_search_row(node, &m.parent_rel, row == selected, &m.indices)
-        })
+        .map(|(offset, m)| render_search_row(m, scroll + offset == selected))
         .collect();
 
-    let title = format!(
-        " matches · {} / {} ",
-        total,
-        app.tree.nodes.len().saturating_sub(1)
-    );
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
+    let indexed = app.search.nucleo_item_count();
+    let status = if app.search.indexing {
+        format!(" matches · {} / indexing\u{2026} ", total)
+    } else {
+        format!(" matches · {} / {} ", total, indexed)
+    };
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(status));
     let mut state = ListState::default();
     f.render_stateful_widget(list, area, &mut state);
     app.list_area = Some(inner_rect(area));
@@ -190,20 +197,16 @@ fn inner_rect(area: Rect) -> Rect {
     Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
 }
 
-fn render_tree_row(node: &Node, selected: bool, highlight: &[u32]) -> ListItem<'static> {
-    let indent = "  ".repeat(node.depth);
-    let icon = if node.is_dir {
-        if node.expanded {
-            "▼ "
-        } else {
-            "▶ "
-        }
+fn render_tree_row<'a>(node: &'a Node, selected: bool, highlight: &[u32]) -> ListItem<'a> {
+    let indent: &'static str = get_indent(node.depth);
+    let icon: &'static str = if node.is_dir {
+        if node.expanded { "▼ " } else { "▶ " }
     } else {
         "  "
     };
     let base_style = base_style_for(node);
     let name_spans = highlighted_name(&node.name, highlight, base_style);
-    let mut spans = vec![Span::raw(indent), Span::raw(icon)];
+    let mut spans: Vec<Span<'a>> = vec![Span::raw(indent), Span::raw(icon)];
     spans.extend(name_spans);
     if node.is_dir {
         spans.push(Span::styled("/", base_style));
@@ -220,25 +223,18 @@ fn render_tree_row(node: &Node, selected: bool, highlight: &[u32]) -> ListItem<'
     ListItem::new(line).style(item_style)
 }
 
-fn render_search_row(
-    node: &Node,
-    parent_rel: &str,
-    selected: bool,
-    highlight: &[u32],
-) -> ListItem<'static> {
-    let icon = if node.is_dir { "▶ " } else { "  " };
-    let base_style = base_style_for(node);
-    let mut spans = vec![Span::raw(icon)];
-    spans.extend(highlighted_name(&node.name, highlight, base_style));
-    if node.is_dir {
+fn render_search_row<'a>(m: &'a SearchMatch, selected: bool) -> ListItem<'a> {
+    let icon: &'static str = if m.is_dir { "▶ " } else { "  " };
+    let base_style = base_style_for_match(m);
+    let mut spans: Vec<Span<'a>> = vec![Span::raw(icon)];
+    spans.extend(highlighted_name(&m.name, &m.indices, base_style));
+    if m.is_dir {
         spans.push(Span::styled("/", base_style));
     }
-    if !parent_rel.is_empty() {
+    if !m.parent_rel.is_empty() {
         spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            format!("in {}", parent_rel),
-            Style::default().fg(HIDDEN_FG),
-        ));
+        spans.push(Span::raw("in "));
+        spans.push(Span::styled(m.parent_rel.as_str(), Style::default().fg(HIDDEN_FG)));
     }
     let item_style = if selected {
         Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD)
@@ -260,33 +256,47 @@ fn base_style_for(node: &Node) -> Style {
     s
 }
 
-fn highlighted_name(name: &str, indices: &[u32], base: Style) -> Vec<Span<'static>> {
-    if indices.is_empty() {
-        return vec![Span::styled(name.to_string(), base)];
+fn base_style_for_match(m: &SearchMatch) -> Style {
+    let mut s = Style::default();
+    if m.is_symlink {
+        s = s.fg(SYMLINK_FG);
+    } else if m.is_dir {
+        s = s.fg(DIR_FG).add_modifier(Modifier::BOLD);
+    } else if m.is_hidden {
+        s = s.fg(HIDDEN_FG);
     }
-    // indices are sorted ascending (nucleo guarantee); walk with a pointer
-    // instead of building a HashSet.
+    s
+}
+
+fn highlighted_name<'a>(name: &'a str, indices: &[u32], base: Style) -> Vec<Span<'a>> {
+    if indices.is_empty() {
+        return vec![Span::styled(name, base)];
+    }
+    // indices are sorted ascending (nucleo guarantee); use byte offsets from
+    // char_indices to avoid String allocation per segment.
     let hl = base.fg(MATCH_FG).add_modifier(Modifier::BOLD);
-    let mut spans = Vec::new();
-    let mut cur = String::new();
+    let mut spans: Vec<Span<'a>> = Vec::new();
+    let mut seg_start = 0usize;
     let mut cur_hl = false;
     let mut idx_pos = 0usize;
-    for (i, c) in name.chars().enumerate() {
-        let is_hl = idx_pos < indices.len() && indices[idx_pos] as usize == i;
+    for (char_i, (byte_i, _)) in name.char_indices().enumerate() {
+        let is_hl = idx_pos < indices.len() && indices[idx_pos] as usize == char_i;
         if is_hl {
             idx_pos += 1;
         }
-        if is_hl != cur_hl && !cur.is_empty() {
-            spans.push(Span::styled(
-                std::mem::take(&mut cur),
-                if cur_hl { hl } else { base },
-            ));
+        if is_hl != cur_hl {
+            if byte_i > seg_start {
+                spans.push(Span::styled(
+                    &name[seg_start..byte_i],
+                    if cur_hl { hl } else { base },
+                ));
+            }
+            seg_start = byte_i;
+            cur_hl = is_hl;
         }
-        cur_hl = is_hl;
-        cur.push(c);
     }
-    if !cur.is_empty() {
-        spans.push(Span::styled(cur, if cur_hl { hl } else { base }));
+    if seg_start < name.len() {
+        spans.push(Span::styled(&name[seg_start..], if cur_hl { hl } else { base }));
     }
     spans
 }

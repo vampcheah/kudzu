@@ -8,6 +8,10 @@ pub enum AppEvent {
     Input(CtEvent),
     FsChanged(Vec<PathBuf>),
     Tick,
+    /// Nucleo has new match results ready; call search.tick().
+    SearchUpdate,
+    /// Background indexer finished walking the filesystem.
+    IndexDone,
 }
 
 pub struct EventLoop {

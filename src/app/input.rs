@@ -135,9 +135,9 @@ impl App {
         match key.code {
             KeyCode::Esc => self.exit_search(),
             KeyCode::Enter => {
-                if let Some(idx) = self.search.selected_node() {
-                    let is_dir = self.tree.nodes[idx].is_dir;
-                    let path = self.tree.nodes[idx].path.clone();
+                if let Some(m) = self.search.selected_match() {
+                    let is_dir = m.is_dir;
+                    let path = m.path.clone();
                     self.exit_search();
                     if is_dir {
                         if let Some(node_idx) = self.tree.find_by_path(&path) {
@@ -159,24 +159,27 @@ impl App {
             KeyCode::PageDown => self.search.move_selection(10),
             KeyCode::PageUp => self.search.move_selection(-10),
             KeyCode::Backspace => {
-                self.search.query.pop();
-                self.search.recompute(&self.tree);
+                let mut q = self.search.query.clone();
+                q.pop();
+                self.search.set_query(&q);
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.exit_search()
             }
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                while matches!(self.search.query.chars().last(), Some(c) if c.is_whitespace()) {
-                    self.search.query.pop();
+                let mut q = self.search.query.clone();
+                while matches!(q.chars().last(), Some(c) if c.is_whitespace()) {
+                    q.pop();
                 }
-                while matches!(self.search.query.chars().last(), Some(c) if !c.is_whitespace()) {
-                    self.search.query.pop();
+                while matches!(q.chars().last(), Some(c) if !c.is_whitespace()) {
+                    q.pop();
                 }
-                self.search.recompute(&self.tree);
+                self.search.set_query(&q);
             }
             KeyCode::Char(c) => {
-                self.search.query.push(c);
-                self.search.recompute(&self.tree);
+                let mut q = self.search.query.clone();
+                q.push(c);
+                self.search.set_query(&q);
             }
             _ => {}
         }
@@ -319,9 +322,9 @@ impl App {
                 }
             }
             Mode::Search => {
-                if let Some(idx) = self.search.selected_node() {
-                    let is_dir = self.tree.nodes[idx].is_dir;
-                    let path = self.tree.nodes[idx].path.clone();
+                if let Some(m) = self.search.selected_match() {
+                    let is_dir = m.is_dir;
+                    let path = m.path.clone();
                     self.exit_search();
                     if is_dir {
                         if let Some(node_idx) = self.tree.find_by_path(&path) {

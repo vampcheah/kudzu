@@ -1,118 +1,173 @@
-use nucleo_matcher::{
-    pattern::{CaseMatching, Normalization, Pattern},
-    Config, Matcher, Utf32Str,
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread,
 };
 
-use crate::tree::Tree;
+use crossbeam_channel::Sender;
+use ignore::WalkBuilder;
+use nucleo::{Config, Matcher, Nucleo, Utf32Str};
+use nucleo::pattern::{CaseMatching, Normalization};
 
-pub struct SearchMatch {
-    pub node: usize,
-    pub score: u32,
-    pub indices: Vec<u32>,
-    /// Parent directory relative to tree root, for display.
+use crate::event::AppEvent;
+use crate::tree::ScanOptions;
+
+/// Data stored per item inside the nucleo index.
+pub struct NodeHandle {
+    pub name: String,
+    pub rel_path: String,
     pub parent_rel: String,
+    pub is_dir: bool,
+    pub is_hidden: bool,
+    pub is_symlink: bool,
+    pub path: PathBuf,
+}
+
+/// A pre-rendered snapshot of a single nucleo match, rebuilt on every tick.
+pub struct SearchMatch {
+    pub indices: Vec<u32>,
+    pub parent_rel: String,
+    pub name: String,
+    pub is_dir: bool,
+    pub is_hidden: bool,
+    pub is_symlink: bool,
+    pub path: PathBuf,
 }
 
 pub struct Search {
     pub query: String,
-    pub matches: Vec<SearchMatch>,
     pub selected: usize,
+    /// True while the background walker thread is still running.
+    pub indexing: bool,
+    /// Pre-built list of matches for this frame (rebuilt by tick()).
+    pub matches: Vec<SearchMatch>,
+    nucleo: Nucleo<NodeHandle>,
+    cancel: Arc<AtomicBool>,
+    /// Reusable fuzzy matcher for computing highlight indices.
     matcher: Matcher,
-    /// Cached parsed pattern — re-parsed only when `query` changes.
-    cached_pattern: Option<(String, Pattern)>,
-    /// Reusable char buffers for nucleo to avoid per-node allocation.
-    path_buf: Vec<char>,
-    name_buf: Vec<char>,
+    /// Scratch buffer for highlight indices during rebuild.
     indices_buf: Vec<u32>,
+    tx: Sender<AppEvent>,
 }
 
 impl Search {
-    pub fn new() -> Self {
+    pub fn new(tx: Sender<AppEvent>) -> Self {
+        let notify_tx = tx.clone();
+        let notify: Arc<dyn Fn() + Sync + Send> = Arc::new(move || {
+            notify_tx.send(AppEvent::SearchUpdate).ok();
+        });
+        let nucleo = Nucleo::new(Config::DEFAULT.match_paths(), notify, None, 2);
         Self {
             query: String::new(),
-            matches: Vec::new(),
             selected: 0,
+            indexing: false,
+            matches: Vec::new(),
+            nucleo,
+            cancel: Arc::new(AtomicBool::new(false)),
             matcher: Matcher::new(Config::DEFAULT.match_paths()),
-            cached_pattern: None,
-            path_buf: Vec::new(),
-            name_buf: Vec::new(),
             indices_buf: Vec::new(),
+            tx,
         }
     }
 
-    pub fn recompute(&mut self, tree: &Tree) {
+    /// Cancel any running indexer, clear nucleo state, and start a fresh walk.
+    pub fn start_indexing(&mut self, root: PathBuf, opts: ScanOptions) {
+        self.cancel.store(true, Ordering::Relaxed);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancel = cancel.clone();
+        self.indexing = true;
         self.matches.clear();
         self.selected = 0;
-        if self.query.is_empty() {
-            return;
-        }
+        self.nucleo.restart(true);
 
-        // Re-parse pattern only when query changes.
-        let query = self.query.clone();
-        let pat = match &self.cached_pattern {
-            Some((q, p)) if q == &query => p,
-            _ => {
-                self.cached_pattern = Some((
-                    query.clone(),
-                    Pattern::parse(&query, CaseMatching::Smart, Normalization::Smart),
-                ));
-                &self.cached_pattern.as_ref().unwrap().1
-            }
-        };
+        let injector = self.nucleo.injector();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let walker = WalkBuilder::new(&root)
+                .hidden(!opts.show_hidden)
+                .git_ignore(opts.respect_gitignore)
+                .git_global(opts.respect_gitignore)
+                .git_exclude(opts.respect_gitignore)
+                .parents(opts.respect_gitignore)
+                .require_git(false)
+                .build();
 
-        for (i, node) in tree.nodes.iter().enumerate() {
-            if i == 0 {
-                continue; // skip root
-            }
-
-            // Run indices (which also gives score) on the full rel-path — the
-            // path signal helps match nested files by directory fragment.
-            self.indices_buf.clear();
-            let path_score = pat.indices(
-                Utf32Str::new(&node.rel_path, &mut self.path_buf),
-                &mut self.matcher,
-                &mut self.indices_buf,
-            );
-
-            // Also score the bare name so a direct name match wins over a
-            // distant path match, but reuse a separate buf without indices
-            // (cheaper than a second indices call).
-            let name_score = pat.score(
-                Utf32Str::new(&node.name, &mut self.name_buf),
-                &mut self.matcher,
-            );
-
-            let score = match (path_score, name_score) {
-                (Some(p), Some(n)) => Some(p.max(n)),
-                (Some(p), None) => Some(p),
-                (None, Some(n)) => Some(n),
-                (None, None) => None,
-            };
-
-            if let Some(s) = score {
-                let name_indices =
-                    map_indices_to_name_suffix(&node.rel_path, &node.name, &self.indices_buf);
-                let parent_rel = node
-                    .path
-                    .strip_prefix(&tree.root)
+            for result in walker {
+                if cancel.load(Ordering::Relaxed) {
+                    return;
+                }
+                let entry = match result {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                if entry.depth() == 0 {
+                    continue; // skip root
+                }
+                let path = entry.path().to_path_buf();
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let rel_path = path
+                    .strip_prefix(&root)
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| name.clone());
+                let parent_rel = path
+                    .strip_prefix(&root)
                     .ok()
                     .and_then(|p| p.parent())
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                self.matches.push(SearchMatch {
-                    node: i,
-                    score: s,
-                    indices: name_indices,
+                let ft = entry.file_type();
+                let is_dir = ft.map(|t| t.is_dir()).unwrap_or(false);
+                let is_symlink = ft.map(|t| t.is_symlink()).unwrap_or(false);
+                let is_hidden = name.starts_with('.');
+                let handle = NodeHandle {
+                    name,
+                    rel_path,
                     parent_rel,
+                    is_dir,
+                    is_hidden,
+                    is_symlink,
+                    path,
+                };
+                injector.push(handle, |h, cols| {
+                    cols[0] = h.name.as_str().into();
+                    cols[1] = h.rel_path.as_str().into();
                 });
             }
-        }
-        self.matches.sort_by(|a, b| b.score.cmp(&a.score));
-        self.matches.truncate(5000);
+            drop(injector);
+            tx.send(AppEvent::IndexDone).ok();
+        });
     }
 
-    pub fn selected_node(&self) -> Option<usize> {
-        self.matches.get(self.selected).map(|m| m.node)
+    /// Update the search query and reparse the nucleo pattern.
+    pub fn set_query(&mut self, new_query: &str) {
+        let append = new_query.starts_with(self.query.as_str());
+        self.query = new_query.to_string();
+        self.nucleo.pattern.reparse(0, new_query, CaseMatching::Smart, Normalization::Smart, append);
+        self.nucleo.pattern.reparse(1, new_query, CaseMatching::Smart, Normalization::Smart, append);
+        self.selected = 0;
+    }
+
+    /// Drive the nucleo worker for up to 10ms; returns true if the snapshot changed.
+    pub fn tick(&mut self) -> bool {
+        let changed = self.nucleo.tick(10).changed;
+        if changed {
+            self.rebuild_matches();
+        }
+        changed
+    }
+
+    pub fn matched_count(&self) -> usize {
+        self.matches.len()
+    }
+
+    pub fn selected_match(&self) -> Option<&SearchMatch> {
+        self.matches.get(self.selected)
     }
 
     pub fn move_selection(&mut self, delta: isize) {
@@ -123,13 +178,74 @@ impl Search {
         let new = (self.selected as isize + delta).clamp(0, len - 1);
         self.selected = new as usize;
     }
+
+    pub fn cancel_indexing(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Total number of items in the nucleo index (not just matches).
+    pub fn nucleo_item_count(&self) -> u32 {
+        self.nucleo.snapshot().item_count()
+    }
+
+    /// Rebuild self.matches from the current nucleo snapshot.
+    fn rebuild_matches(&mut self) {
+        self.matches.clear();
+        if self.query.is_empty() {
+            return;
+        }
+
+        // Phase 1: clone raw data out of the snapshot (releases the borrow before
+        // we need &mut self.matcher and &mut self.indices_buf).
+        let pat = self.nucleo.pattern.column_pattern(0).clone();
+        let raw: Vec<(String, String, bool, bool, bool, PathBuf)> = {
+            let snapshot = self.nucleo.snapshot();
+            let count = (snapshot.matched_item_count() as usize).min(5000);
+            (0..count as u32)
+                .filter_map(|i| {
+                    let item = snapshot.get_matched_item(i)?;
+                    let h = item.data;
+                    Some((
+                        h.name.clone(),
+                        h.parent_rel.clone(),
+                        h.is_dir,
+                        h.is_hidden,
+                        h.is_symlink,
+                        h.path.clone(),
+                    ))
+                })
+                .collect()
+        };
+
+        // Phase 2: compute highlight indices with the cloned pattern.
+        let mut name_buf = Vec::new();
+        for (name, parent_rel, is_dir, is_hidden, is_symlink, path) in raw {
+            self.indices_buf.clear();
+            name_buf.clear();
+            pat.indices(
+                Utf32Str::new(&name, &mut name_buf),
+                &mut self.matcher,
+                &mut self.indices_buf,
+            );
+            let indices = self.indices_buf.clone();
+            self.matches.push(SearchMatch {
+                indices,
+                parent_rel,
+                name,
+                is_dir,
+                is_hidden,
+                is_symlink,
+                path,
+            });
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tree::{ScanOptions, Tree};
-    use std::{fs, path::PathBuf};
+    use crossbeam_channel::unbounded;
+    use std::{fs, path::PathBuf, time::{Duration, Instant}};
 
     fn tmp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("kudzu-search-{}-{}", tag, std::process::id()));
@@ -145,59 +261,31 @@ mod tests {
         fs::write(root.join("src/deep/widget.rs"), "").unwrap();
         fs::write(root.join("README.md"), "").unwrap();
 
-        let mut tree = Tree::new(root.clone(), ScanOptions::default()).unwrap();
-        tree.load_all(10_000).unwrap();
+        let (tx, rx) = unbounded::<AppEvent>();
+        let mut s = Search::new(tx);
+        s.start_indexing(root.clone(), ScanOptions::default());
+        s.set_query("widget");
 
-        let mut s = Search::new();
-        s.query = "widget".to_string();
-        s.recompute(&tree);
-        assert!(!s.matches.is_empty());
-        let top = s.matches[0].node;
-        assert!(tree.nodes[top].path.ends_with("widget.rs"));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            s.tick();
+            if s.matched_count() > 0 {
+                break;
+            }
+            if Instant::now() > deadline {
+                break;
+            }
+            let _ = rx.recv_timeout(Duration::from_millis(10));
+        }
+        assert!(s.matched_count() > 0, "should find widget.rs");
+        let m = s.selected_match().expect("should have a selection");
+        assert!(m.path.ends_with("widget.rs"));
     }
 
     #[test]
     fn empty_query_yields_no_matches() {
-        let root = tmp("empty");
-        fs::write(root.join("x.txt"), "").unwrap();
-        let tree = Tree::new(root, ScanOptions::default()).unwrap();
-        let mut s = Search::new();
-        s.recompute(&tree);
-        assert!(s.matches.is_empty());
+        let (tx, _rx) = unbounded::<AppEvent>();
+        let s = Search::new(tx);
+        assert_eq!(s.matched_count(), 0);
     }
-
-    #[test]
-    fn pattern_cached_across_recompute() {
-        let root = tmp("cache");
-        fs::write(root.join("foo.rs"), "").unwrap();
-        let tree = Tree::new(root, ScanOptions::default()).unwrap();
-        let mut s = Search::new();
-        s.query = "foo".to_string();
-        s.recompute(&tree);
-        let first_count = s.matches.len();
-        s.recompute(&tree); // second call reuses cached pattern
-        assert_eq!(s.matches.len(), first_count);
-    }
-}
-
-/// Convert char indices in the full rel-path string into indices within the
-/// name suffix — so highlights align with what the UI renders.
-fn map_indices_to_name_suffix(rel: &str, name: &str, indices: &[u32]) -> Vec<u32> {
-    let name_chars_len = name.chars().count();
-    let rel_chars_len = rel.chars().count();
-    if name_chars_len == 0 || rel_chars_len < name_chars_len {
-        return Vec::new();
-    }
-    let name_start = rel_chars_len - name_chars_len;
-    indices
-        .iter()
-        .filter_map(|&i| {
-            let i = i as usize;
-            if i >= name_start && i < rel_chars_len {
-                Some((i - name_start) as u32)
-            } else {
-                None
-            }
-        })
-        .collect()
 }

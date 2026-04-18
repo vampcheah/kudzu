@@ -1,9 +1,11 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use crossbeam_channel::unbounded;
 use kudzu::{
+    event::AppEvent,
     search::Search,
-    tree::{ScanOptions, Tree},
+    tree::ScanOptions,
 };
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::{Duration, Instant}};
 
 fn tmp(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("kudzu-sbench-{}-{}", tag, std::process::id()));
@@ -22,22 +24,37 @@ fn make_flat_tree(root: &PathBuf, dirs: usize, files_per_dir: usize) {
     }
 }
 
-fn bench_search_recompute(c: &mut Criterion) {
-    let mut group = c.benchmark_group("search_recompute");
+/// Wait until indexing finishes (IndexDone) or timeout.
+fn wait_indexed(s: &mut Search, rx: &crossbeam_channel::Receiver<AppEvent>, timeout_ms: u64) {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    while s.indexing && Instant::now() < deadline {
+        let _ = rx.recv_timeout(Duration::from_millis(20));
+        s.tick();
+    }
+}
+
+fn bench_tick_after_index(c: &mut Criterion) {
+    let mut group = c.benchmark_group("search_tick");
     let root = tmp("search");
-    make_flat_tree(&root, 20, 50);
-    let mut tree = Tree::new(root.clone(), ScanOptions::default()).unwrap();
-    tree.load_all(100_000).unwrap();
+    make_flat_tree(&root, 20, 50); // 1 + 20 + 20*50 = 1021 files
 
     for query in ["r", "file", "file0042", "dir0010/file0042"] {
+        let (tx, rx) = unbounded::<AppEvent>();
+        let mut s = Search::new(tx);
+        s.start_indexing(root.clone(), ScanOptions::default());
+        wait_indexed(&mut s, &rx, 5000);
+        s.set_query(query);
+        s.tick(); // prime
+
         group.bench_with_input(
             BenchmarkId::new("query", query),
             query,
             |b, q| {
-                let mut s = Search::new();
-                s.query = q.to_string();
                 b.iter(|| {
-                    s.recompute(&tree);
+                    // Simulate the main loop: set query, tick, count results.
+                    s.set_query(q);
+                    s.tick();
+                    criterion::black_box(s.matched_count());
                 });
             },
         );
@@ -46,22 +63,5 @@ fn bench_search_recompute(c: &mut Criterion) {
     let _ = fs::remove_dir_all(&root);
 }
 
-fn bench_search_pattern_cache(c: &mut Criterion) {
-    let root = tmp("cache");
-    make_flat_tree(&root, 20, 50);
-    let mut tree = Tree::new(root.clone(), ScanOptions::default()).unwrap();
-    tree.load_all(100_000).unwrap();
-
-    // Measure repeated recomputes with the same query (exercises pattern cache).
-    c.bench_function("search_same_query_cached", |b| {
-        let mut s = Search::new();
-        s.query = "file0042".to_string();
-        b.iter(|| {
-            s.recompute(&tree);
-        });
-    });
-    let _ = fs::remove_dir_all(&root);
-}
-
-criterion_group!(benches, bench_search_recompute, bench_search_pattern_cache);
+criterion_group!(benches, bench_tick_after_index);
 criterion_main!(benches);

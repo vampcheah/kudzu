@@ -107,7 +107,7 @@ impl Tree {
         while let Some(i) = stack.pop() {
             if self.nodes[i].is_dir && self.nodes[i].expanded {
                 out.push(self.nodes[i].path.clone());
-                for c in self.children_of(i) {
+                for &c in self.children_of(i) {
                     stack.push(c);
                 }
             }
@@ -115,8 +115,8 @@ impl Tree {
         out
     }
 
-    fn children_of(&self, idx: usize) -> Vec<usize> {
-        self.children[idx].clone()
+    fn children_of(&self, idx: usize) -> &[usize] {
+        &self.children[idx]
     }
 
     pub fn toggle_expand(&mut self, idx: usize) -> Result<()> {
@@ -203,7 +203,8 @@ impl Tree {
         // Snapshot expansion state of surviving subdirectories (keyed by path).
         let old: HashMap<PathBuf, bool> = self
             .children_of(idx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|&ci| self.nodes[ci].is_dir && self.nodes[ci].expanded)
             .map(|ci| (self.nodes[ci].path.clone(), true))
             .collect();
@@ -216,7 +217,7 @@ impl Tree {
         self.load_children(idx)?;
 
         // Recursively restore expansion on matching paths.
-        let mut queue: Vec<usize> = self.children_of(idx);
+        let mut queue: Vec<usize> = self.children_of(idx).to_vec();
         while let Some(ci) = queue.pop() {
             let path = self.nodes[ci].path.clone();
             if old.contains_key(&path) && self.nodes[ci].is_dir {
@@ -228,8 +229,7 @@ impl Tree {
                 let _ = 0;
             }
             // Check if any deeper expanded dirs from old snapshot are children of ci.
-            let ci_kids = self.children_of(ci);
-            for k in ci_kids {
+            for &k in self.children_of(ci) {
                 if old.contains_key(&self.nodes[k].path) {
                     queue.push(k);
                 }
@@ -259,7 +259,7 @@ impl Tree {
         let mut out = Vec::new();
         let mut stack = vec![idx];
         while let Some(i) = stack.pop() {
-            for c in self.children_of(i) {
+            for &c in self.children_of(i) {
                 out.push(c);
                 stack.push(c);
             }
@@ -309,6 +309,31 @@ impl Tree {
         self.path_index.get(path).copied()
     }
 
+    /// Ensure all ancestor directories of `path` have their children loaded
+    /// so that `find_by_path(path)` returns `Some`. Returns the node index
+    /// of `path` if it can be found (or loaded), `None` otherwise (e.g. if
+    /// the path is gitignored or outside the root).
+    pub fn ensure_loaded(&mut self, path: &Path) -> Option<usize> {
+        if !path.starts_with(&self.root) {
+            return None;
+        }
+        if let Some(idx) = self.find_by_path(path) {
+            return Some(idx);
+        }
+        // Walk each ancestor from root down to path's parent, loading children
+        // at each level so the path eventually appears in the index.
+        let rel = path.strip_prefix(&self.root).ok()?;
+        let mut current = self.root.clone();
+        for component in rel.parent()?.components() {
+            current.push(component);
+            let idx = self.find_by_path(&current)?;
+            if self.nodes[idx].is_dir && !self.nodes[idx].children_loaded {
+                self.load_children(idx).ok()?;
+            }
+        }
+        self.find_by_path(path)
+    }
+
     pub fn rebuild_visible(&mut self) {
         self.visible.clear();
         self.walk_visible(0);
@@ -317,7 +342,7 @@ impl Tree {
     fn walk_visible(&mut self, idx: usize) {
         self.visible.push(idx);
         if self.nodes[idx].expanded {
-            let kids = self.children_of(idx);
+            let kids: Vec<usize> = self.children[idx].clone();
             for c in kids {
                 self.walk_visible(c);
             }
@@ -336,7 +361,7 @@ impl Tree {
             if self.nodes[i].is_dir && !self.nodes[i].children_loaded {
                 self.load_children(i)?;
             }
-            for c in self.children_of(i) {
+            for &c in self.children_of(i) {
                 if self.nodes[c].is_dir {
                     queue.push(c);
                 }
@@ -363,7 +388,7 @@ impl Tree {
         // BFS: expand root, then iterate children and expand matches.
         let mut queue = vec![0usize];
         while let Some(i) = queue.pop() {
-            let kids = self.children_of(i);
+            let kids: Vec<usize> = self.children[i].clone();
             for k in kids {
                 if self.nodes[k].is_dir && expanded.contains(&self.nodes[k].path) {
                     self.expand(k)?;
@@ -379,6 +404,7 @@ impl Tree {
 struct Entry {
     path: PathBuf,
     name: String,
+    name_lower: String,
     is_dir: bool,
     is_hidden: bool,
     is_symlink: bool,
@@ -423,7 +449,7 @@ fn read_children(path: &Path, opts: &ScanOptions) -> Vec<Entry> {
     out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
-        _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        _ => a.name_lower.cmp(&b.name_lower),
     });
     out
 }
@@ -570,10 +596,12 @@ fn entry_from_dir_entry(path: &Path) -> Option<Entry> {
     } else {
         meta.is_dir()
     };
+    let name_lower = name.to_lowercase();
     Some(Entry {
         path: path.to_path_buf(),
         is_hidden: name.starts_with('.'),
         name,
+        name_lower,
         is_dir,
         is_symlink,
         size: meta.len(),

@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "kudzu"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -821,7 +821,7 @@ dependencies = [
  "ignore",
  "notify",
  "notify-debouncer-full",
- "nucleo-matcher",
+ "nucleo",
  "ratatui",
 ]
 
@@ -1021,6 +1021,17 @@ dependencies = [
  "notify",
  "parking_lot",
  "walkdir",
+]
+
+[[package]]
+name = "nucleo"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5262af4c94921c2646c5ac6ff7900c2af9cbb08dc26a797e18130a7019c039d4"
+dependencies = [
+ "nucleo-matcher",
+ "parking_lot",
+ "rayon",
 ]
 
 [[package]]

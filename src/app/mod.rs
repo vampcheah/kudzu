@@ -33,8 +33,6 @@ use crate::{
 
 use crossterm::event::Event as CtEvent;
 
-const SEARCH_POOL_NODE_CAP: usize = 50_000;
-
 /// Number of pages in the help overlay (must match HELP_PAGES in ui.rs).
 pub const HELP_PAGES_LEN: usize = 5;
 
@@ -86,7 +84,7 @@ impl App {
             respect_gitignore: cfg.respect_gitignore,
         };
         let mut tree = Tree::new(root, opts)?;
-        let mut watcher = FsWatcher::new(tx)?;
+        let mut watcher = FsWatcher::new(tx.clone())?;
         apply_watch_delta(&mut watcher, tree.take_watch_delta());
         Ok(Self {
             tree,
@@ -96,7 +94,7 @@ impl App {
             status_until: None,
             should_quit: false,
             mode: Mode::Normal,
-            search: Search::new(),
+            search: Search::new(tx.clone()),
             cfg,
             show_help: false,
             help_tab: 0,
@@ -190,32 +188,31 @@ impl App {
     pub fn selected_node(&self) -> Option<usize> {
         match self.mode {
             Mode::Normal => self.tree.visible.get(self.selected).copied(),
-            Mode::Search => self.search.selected_node(),
+            Mode::Search => None,
         }
     }
 
     pub(super) fn enter_search(&mut self) -> Result<()> {
-        let before = self.tree.nodes.len();
-        self.tree.load_all(SEARCH_POOL_NODE_CAP)?;
-        let loaded = self.tree.nodes.len();
-        self.tree.rebuild_visible();
         self.mode = Mode::Search;
-        self.search.query.clear();
-        self.search.recompute(&self.tree);
-        if loaded > before {
-            self.flash(format!("indexed {loaded} entries for search"));
-        }
+        self.search.set_query("");
+        self.search.start_indexing(self.tree.root.clone(), self.tree.opts);
+        self.flash("indexing\u{2026}");
         Ok(())
     }
 
     pub(super) fn exit_search(&mut self) {
+        self.search.cancel_indexing();
         self.mode = Mode::Normal;
-        if let Some(node_idx) = self.search.selected_node() {
-            self.reveal(node_idx);
+        let selected_path = self.search.selected_match().map(|m| m.path.clone());
+        if let Some(path) = selected_path {
+            if let Some(node_idx) = self.tree.ensure_loaded(&path) {
+                self.reveal(node_idx);
+            }
         }
-        self.search.query.clear();
+        self.search.set_query("");
         self.search.matches.clear();
         self.search.selected = 0;
+        self.search.indexing = false;
     }
 
     /// Expand all ancestors of `node_idx` and place selection on it.
@@ -253,9 +250,6 @@ impl App {
             if self.selected >= self.tree.visible.len() {
                 self.selected = self.tree.visible.len().saturating_sub(1);
             }
-            if self.mode == Mode::Search {
-                self.search.recompute(&self.tree);
-            }
         }
     }
 }
@@ -289,12 +283,27 @@ where
                 app.on_fs_changed(paths);
                 (Action::None, true)
             }
+            AppEvent::SearchUpdate => {
+                let changed = app.search.tick();
+                (Action::None, changed)
+            }
+            AppEvent::IndexDone => {
+                app.search.indexing = false;
+                app.status.clear();
+                app.status_until = None;
+                (Action::None, true)
+            }
             AppEvent::Tick => {
-                // Tick only redraws when a flash status just expired.
+                // Tick only redraws when a flash status just expired or search updated.
                 let had_status = !app.status.is_empty();
                 app.expire_status();
                 let status_cleared = had_status && app.status.is_empty();
-                (Action::None, status_cleared)
+                let search_changed = if app.mode == Mode::Search {
+                    app.search.tick()
+                } else {
+                    false
+                };
+                (Action::None, status_cleared || search_changed)
             }
         };
         app.drain_watch();

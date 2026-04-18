@@ -4,7 +4,7 @@
 //! node data that matches realistic tree shapes.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use nucleo_matcher::{
+use nucleo::{
     pattern::{CaseMatching, Normalization, Pattern},
     Config, Matcher, Utf32Str,
 };

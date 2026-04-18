@@ -4,8 +4,8 @@ version = "1.0.0"
 edition = "2021"
 
 [dependencies]
-ratatui = "0.28"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 notify = "6"
 notify-debouncer-full = "0.3"
 crossbeam-channel = "0.5"

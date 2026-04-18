@@ -388,47 +388,75 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+struct HelpPage {
+    title: &'static str,
+    rows: &'static [(&'static str, &'static str)],
+}
+
+const HELP_PAGES: &[HelpPage] = &[
+    HelpPage {
+        title: "Navigate",
+        rows: &[
+            ("s / ↓", "move down"),
+            ("w / ↑", "move up"),
+            ("u / ←", "collapse · parent · ascend root"),
+            ("l / → / Space", "expand"),
+            ("f", "focus: descend root into selected dir"),
+            ("g / Home", "top"),
+            ("G / End", "bottom"),
+            ("Ctrl-d / PgDn", "down 10"),
+            ("Ctrl-u / PgUp", "up 10"),
+        ],
+    },
+    HelpPage {
+        title: "Open",
+        rows: &[
+            ("Enter", "expand dir or open file"),
+            ("o", "open file in editor"),
+            ("double-click", "open (editor or GUI, per config)"),
+            ("M", "open in file manager"),
+        ],
+    },
+    HelpPage {
+        title: "File ops",
+        rows: &[
+            ("n", "new file in selected dir"),
+            ("N", "new folder in selected dir"),
+            ("R", "rename selected"),
+            ("D", "delete selected (confirm y)"),
+            ("right-click", "context menu"),
+        ],
+    },
+    HelpPage {
+        title: "View",
+        rows: &[
+            (".", "toggle hidden files"),
+            ("i", "toggle .gitignore"),
+            ("r", "rescan"),
+            ("h", "toggle this help"),
+            ("q / Ctrl-c", "quit"),
+        ],
+    },
+    HelpPage {
+        title: "Search",
+        rows: &[
+            ("/", "enter search"),
+            ("type", "filter"),
+            ("↑ / ↓", "select match"),
+            ("Enter", "jump to (open if file)"),
+            ("Backspace", "delete char"),
+            ("Ctrl-w", "delete word"),
+            ("Esc / Ctrl-c", "exit search"),
+        ],
+    },
+];
+
 fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
-    let normal_rows: &[(&str, &str)] = &[
-        ("s / ↓", "move down"),
-        ("w / ↑", "move up"),
-        ("u / ←", "collapse · parent · ascend root"),
-        ("l / → / Space", "expand"),
-        ("f", "focus: descend root into selected dir"),
-        ("Enter", "expand dir or open file in editor"),
-        ("o", "open file in editor"),
-        ("double-click", "open (editor or GUI, per config)"),
-        ("g / Home", "top"),
-        ("G / End", "bottom"),
-        ("Ctrl-d / PgDn", "down 10"),
-        ("Ctrl-u / PgUp", "up 10"),
-        ("/", "search"),
-        ("n", "new file in selected dir"),
-        ("N", "new folder in selected dir"),
-        ("R", "rename selected"),
-        ("D", "delete selected (confirm y)"),
-        ("M", "open in file manager"),
-        (".", "toggle hidden files"),
-        ("i", "toggle .gitignore"),
-        ("r", "rescan"),
-        ("h", "toggle this help"),
-        ("q / Ctrl-c", "quit"),
-    ];
-    let search_rows: &[(&str, &str)] = &[
-        ("type", "filter"),
-        ("↑ / ↓", "select match"),
-        ("Enter", "jump to (open if file)"),
-        ("Backspace", "delete char"),
-        ("Ctrl-w", "delete word"),
-        ("Esc / Ctrl-c", "exit search"),
-    ];
+    let tab = app.help_tab.min(HELP_PAGES.len().saturating_sub(1));
+    let page = &HELP_PAGES[tab];
+    let rows = page.rows;
 
-    let rows = if app.mode == Mode::Search {
-        search_rows
-    } else {
-        normal_rows
-    };
-
+    // Build content lines
     let key_col = rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
     let mut lines: Vec<Line> = rows
         .iter()
@@ -446,17 +474,54 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
         .collect();
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        " press any key to close ",
+        " Tab: next page · any key: close ",
         Style::default().fg(HIDDEN_FG),
     )));
 
-    let inner_width = lines
+    // Build tab bar line
+    let tab_bar: Line = {
+        let mut spans = vec![Span::raw(" ")];
+        for (i, p) in HELP_PAGES.iter().enumerate() {
+            if i == tab {
+                spans.push(Span::styled(
+                    format!("[{}]", p.title),
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    p.title.to_string(),
+                    Style::default().fg(HIDDEN_FG),
+                ));
+            }
+            if i + 1 < HELP_PAGES.len() {
+                spans.push(Span::styled(" · ", Style::default().fg(HIDDEN_FG)));
+            }
+        }
+        spans.push(Span::raw(" "));
+        Line::from(spans)
+    };
+
+    // Compute popup dimensions — use the widest across ALL pages so it doesn't
+    // jump when switching tabs.
+    let max_content_width = HELP_PAGES
         .iter()
-        .map(|l| l.width() as u16)
+        .flat_map(|p| p.rows.iter())
+        .map(|(k, desc)| {
+            let key_w = HELP_PAGES
+                .iter()
+                .flat_map(|p| p.rows.iter())
+                .map(|(k2, _)| k2.chars().count())
+                .max()
+                .unwrap_or(0);
+            let pad = key_w.saturating_sub(k.chars().count());
+            1 + k.chars().count() + pad + 2 + desc.chars().count()
+        })
         .max()
-        .unwrap_or(40)
-        + 2;
-    let inner_height = lines.len() as u16 + 2;
+        .unwrap_or(40) as u16;
+
+    let tab_bar_width = tab_bar.width() as u16;
+    let inner_width = max_content_width.max(tab_bar_width) + 2;
+    let inner_height = (1 + lines.len()) as u16 + 2; // tab bar + content lines + borders
     let width = inner_width.min(area.width.saturating_sub(2)).max(20);
     let height = inner_height.min(area.height.saturating_sub(2)).max(6);
     let x = area.x + area.width.saturating_sub(width) / 2;
@@ -464,16 +529,33 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
     let popup = Rect::new(x, y, width, height);
 
     f.render_widget(Clear, popup);
-    let title = if app.mode == Mode::Search {
-        " help · search mode "
-    } else {
-        " help "
-    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(ACCENT))
-        .title(title);
-    f.render_widget(Paragraph::new(lines).block(block), popup);
+        .title(" help ");
+
+    // Render tab bar + content inside the block
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    if inner.height == 0 {
+        return;
+    }
+
+    // First line: tab bar
+    let tab_area = Rect::new(inner.x, inner.y, inner.width, 1);
+    f.render_widget(Paragraph::new(tab_bar), tab_area);
+
+    // Remaining lines: key bindings
+    if inner.height > 1 {
+        let content_area = Rect::new(
+            inner.x,
+            inner.y + 1,
+            inner.width,
+            inner.height - 1,
+        );
+        f.render_widget(Paragraph::new(lines), content_area);
+    }
 }
 
 fn human_size(bytes: u64) -> String {

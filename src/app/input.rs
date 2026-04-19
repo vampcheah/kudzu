@@ -39,7 +39,7 @@ impl App {
                     if self.tree.nodes[idx].is_dir {
                         self.toggle_and_reselect(idx)?;
                     } else if key.code == KeyCode::Enter {
-                        return Ok(Action::OpenInEditor(self.tree.nodes[idx].path.clone()));
+                        return self.activate_selected();
                     }
                 }
             }

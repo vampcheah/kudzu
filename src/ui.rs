@@ -405,9 +405,8 @@ const HELP_PAGES: &[HelpPage] = &[
     HelpPage {
         title: "Open",
         rows: &[
-            ("Enter", "expand dir or open file"),
+            ("Enter / double-click", "expand dir or open file (editor or GUI, per config)"),
             ("o", "open file in editor"),
-            ("double-click", "open (editor or GUI, per config)"),
             ("M", "open in file manager"),
         ],
     },

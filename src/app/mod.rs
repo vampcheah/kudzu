@@ -265,6 +265,9 @@ where
 
     // Initial draw.
     terminal.draw(|f| ui::draw(f, &mut app))?;
+    if app.cfg.osc7 {
+        emit_osc7(terminal.backend_mut(), &app.tree.root.clone());
+    }
 
     loop {
         if app.should_quit {
@@ -307,7 +310,12 @@ where
         app.drain_watch();
 
         match action {
-            Action::None | Action::RootChanged => {}
+            Action::None => {}
+            Action::RootChanged => {
+                if app.cfg.osc7 {
+                    emit_osc7(terminal.backend_mut(), &app.tree.root.clone());
+                }
+            }
             Action::OpenInEditor(path) => {
                 if is_image(&path) {
                     match spawn_detached(&app.cfg.gui_editor, &path) {
@@ -393,6 +401,28 @@ fn split_command(cmd: &str) -> (String, Vec<String>) {
     let bin = parts.next().unwrap_or("xdg-open").to_string();
     let extra = parts.map(|s| s.to_string()).collect();
     (bin, extra)
+}
+
+fn percent_encode_path(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for b in path.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(b as char);
+            }
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{:02X}", b);
+            }
+        }
+    }
+    out
+}
+
+fn emit_osc7(w: &mut impl io::Write, dir: &Path) {
+    let encoded = percent_encode_path(&dir.to_string_lossy());
+    let _ = write!(w, "\x1b]7;file://{}\x07", encoded);
+    let _ = w.flush();
 }
 
 /// Leave the alternate screen / raw mode, run `f`, then restore.

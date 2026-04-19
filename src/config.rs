@@ -15,6 +15,7 @@ pub struct Config {
     pub double_click: DoubleClick,
     pub gui_editor: String,
     pub file_manager: String,
+    pub osc7: bool,
     pub root: Option<PathBuf>,
 }
 
@@ -26,6 +27,7 @@ impl Default for Config {
             double_click: DoubleClick::Editor,
             gui_editor: "xdg-open".to_string(),
             file_manager: default_file_manager().to_string(),
+            osc7: false,
             root: None,
         }
     }
@@ -133,6 +135,7 @@ fn set_key(cfg: &mut Config, key: &str, value: &str) -> Result<(), String> {
         "double_click" => cfg.double_click = parse_double_click(value)?,
         "gui_editor" => cfg.gui_editor = value.to_string(),
         "file_manager" => cfg.file_manager = value.to_string(),
+        "osc7" => cfg.osc7 = parse_bool(value)?,
         other => return Err(format!("unknown key `{}`", other)),
     }
     Ok(())
@@ -151,6 +154,8 @@ fn apply_cli<I: IntoIterator<Item = String>>(cfg: &mut Config, args: I) -> Resul
                 "hide-hidden" | "no-show-hidden" => cfg.show_hidden = false,
                 "ignore" | "respect-gitignore" => cfg.respect_gitignore = true,
                 "no-ignore" => cfg.respect_gitignore = false,
+                "osc7" => cfg.osc7 = true,
+                "no-osc7" => cfg.osc7 = false,
                 "double-click" => {
                     let v = value.ok_or_else(|| {
                         anyhow::anyhow!("--double-click requires =editor|gui")
@@ -200,6 +205,8 @@ fn print_help() {
              --double-click=gui       double-click spawns GUI editor\n\
              --gui-editor=<cmd>       GUI editor command (default: xdg-open)\n\
              --file-manager=<cmd>     file manager command (default: xdg-open/open/explorer)\n\
+             --osc7                   emit OSC 7 working-directory reports\n\
+             --no-osc7                disable OSC 7 reports (default)\n\
              --help                   print this help\n\
          \n\
          CONFIG FILE:\n\

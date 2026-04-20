@@ -9,6 +9,7 @@ pub enum MenuItem {
     NewFolder,
     NewFile,
     Rename,
+    Delete,
     OpenFile,
     OpenFolder,
 }
@@ -19,6 +20,7 @@ impl MenuItem {
             MenuItem::NewFolder => "New Folder",
             MenuItem::NewFile => "New File",
             MenuItem::Rename => "Rename",
+            MenuItem::Delete => "Delete",
             MenuItem::OpenFile => "Open File",
             MenuItem::OpenFolder => "Open Folder",
         }
@@ -57,6 +59,7 @@ impl App {
         match target {
             Some(idx) if idx != 0 => {
                 items.push(MenuItem::Rename);
+                items.push(MenuItem::Delete);
                 if self.tree.nodes[idx].is_dir {
                     items.push(MenuItem::OpenFolder);
                 } else {
@@ -127,6 +130,19 @@ impl App {
                             kind: PromptKind::Rename,
                             buffer: name,
                             cursor,
+                            target: node.path.clone(),
+                        });
+                    }
+                }
+            }
+            MenuItem::Delete => {
+                if let Some(idx) = target {
+                    if idx != 0 {
+                        let node = &self.tree.nodes[idx];
+                        self.input = Some(Prompt {
+                            kind: PromptKind::Delete,
+                            buffer: String::new(),
+                            cursor: 0,
                             target: node.path.clone(),
                         });
                     }

@@ -86,7 +86,7 @@ Editor is resolved as `$EDITOR` → `$VISUAL` → `vi`.
 ### Mouse
 
 - Click to select, double-click to expand dir or open file
-- Right-click for context menu (new file/folder, rename, open)
+- Right-click for context menu (new file/folder, rename, delete, open)
 - Scroll to navigate
 
 ## Configuration
@@ -99,6 +99,7 @@ respect_gitignore = true     # respect .gitignore
 double_click = "editor"      # "editor" (terminal $EDITOR) or "gui" (GUI app)
 gui_editor = "xdg-open"      # command for double_click = "gui", e.g. "code -n"
 file_manager = "xdg-open"    # command for M key; defaults to open/explorer on macOS/Windows
+osc7 = false                 # emit OSC 7 working-directory escape sequences
 ```
 
 Command-line flags override config:
@@ -106,6 +107,7 @@ Command-line flags override config:
 ```bash
 kudzu --show-hidden --double-click=gui --gui-editor=code
 kudzu --no-ignore ~/projects
+kudzu --osc7                 # enable OSC 7 reports (e.g. for terminal tab titles)
 kudzu --help
 ```
 

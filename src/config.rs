@@ -1,6 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
 use anyhow::{bail, Result};
+use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoubleClick {
@@ -30,6 +31,27 @@ impl Default for Config {
             osc7: false,
             root: None,
         }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileConfig {
+    show_hidden: Option<bool>,
+    respect_gitignore: Option<bool>,
+    double_click: Option<DoubleClick>,
+    gui_editor: Option<String>,
+    file_manager: Option<String>,
+    osc7: Option<bool>,
+}
+
+impl<'de> Deserialize<'de> for DoubleClick {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        parse_double_click(&value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -70,54 +92,29 @@ fn config_path() -> Option<PathBuf> {
         .map(|h| PathBuf::from(h).join(".config/kudzu/config.toml"))
 }
 
-/// Tiny subset of TOML: `key = value` lines. Values may be `true`/`false`,
-/// bare identifiers, or `"quoted strings"`. Lines beginning with `#` or
-/// blank are ignored. Sections (`[...]`) are skipped silently.
+/// Parse the user config as real TOML, while keeping the accepted surface
+/// intentionally small and explicit.
 fn apply_toml(cfg: &mut Config, text: &str) -> Result<()> {
-    for (lineno, raw) in text.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') || line.starts_with('[') {
-            continue;
-        }
-        let (key, value) = match line.split_once('=') {
-            Some(kv) => kv,
-            None => bail!("config: line {}: expected `key = value`", lineno + 1),
-        };
-        let key = key.trim();
-        let value = strip_comment(value.trim());
-        let value = unquote(value);
-        set_key(cfg, key, &value).map_err(|e| anyhow::anyhow!("config: {}: {}", key, e))?;
+    let file: FileConfig = toml::from_str(text).map_err(|e| anyhow::anyhow!("config: {}", e))?;
+    if let Some(v) = file.show_hidden {
+        cfg.show_hidden = v;
+    }
+    if let Some(v) = file.respect_gitignore {
+        cfg.respect_gitignore = v;
+    }
+    if let Some(v) = file.double_click {
+        cfg.double_click = v;
+    }
+    if let Some(v) = file.gui_editor {
+        cfg.gui_editor = v;
+    }
+    if let Some(v) = file.file_manager {
+        cfg.file_manager = v;
+    }
+    if let Some(v) = file.osc7 {
+        cfg.osc7 = v;
     }
     Ok(())
-}
-
-fn strip_comment(s: &str) -> &str {
-    // Only strip `#` when outside of a quoted string.
-    let mut in_str = false;
-    for (i, c) in s.char_indices() {
-        match c {
-            '"' => in_str = !in_str,
-            '#' if !in_str => return s[..i].trim_end(),
-            _ => {}
-        }
-    }
-    s
-}
-
-fn unquote(s: &str) -> String {
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        s[1..s.len() - 1].to_string()
-    } else {
-        s.to_string()
-    }
-}
-
-fn parse_bool(s: &str) -> Result<bool, String> {
-    match s {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        other => Err(format!("expected true/false, got `{}`", other)),
-    }
 }
 
 fn parse_double_click(s: &str) -> Result<DoubleClick, String> {
@@ -126,19 +123,6 @@ fn parse_double_click(s: &str) -> Result<DoubleClick, String> {
         "gui" => Ok(DoubleClick::Gui),
         other => Err(format!("expected `editor`/`gui`, got `{}`", other)),
     }
-}
-
-fn set_key(cfg: &mut Config, key: &str, value: &str) -> Result<(), String> {
-    match key {
-        "show_hidden" => cfg.show_hidden = parse_bool(value)?,
-        "respect_gitignore" => cfg.respect_gitignore = parse_bool(value)?,
-        "double_click" => cfg.double_click = parse_double_click(value)?,
-        "gui_editor" => cfg.gui_editor = value.to_string(),
-        "file_manager" => cfg.file_manager = value.to_string(),
-        "osc7" => cfg.osc7 = parse_bool(value)?,
-        other => return Err(format!("unknown key `{}`", other)),
-    }
-    Ok(())
 }
 
 fn apply_cli<I: IntoIterator<Item = String>>(cfg: &mut Config, args: I) -> Result<()> {
@@ -157,19 +141,18 @@ fn apply_cli<I: IntoIterator<Item = String>>(cfg: &mut Config, args: I) -> Resul
                 "osc7" => cfg.osc7 = true,
                 "no-osc7" => cfg.osc7 = false,
                 "double-click" => {
-                    let v = value.ok_or_else(|| {
-                        anyhow::anyhow!("--double-click requires =editor|gui")
-                    })?;
+                    let v = value
+                        .ok_or_else(|| anyhow::anyhow!("--double-click requires =editor|gui"))?;
                     cfg.double_click = parse_double_click(&v)
                         .map_err(|e| anyhow::anyhow!("--double-click: {}", e))?;
                 }
                 "gui-editor" => {
-                    cfg.gui_editor = value
-                        .ok_or_else(|| anyhow::anyhow!("--gui-editor requires =<cmd>"))?;
+                    cfg.gui_editor =
+                        value.ok_or_else(|| anyhow::anyhow!("--gui-editor requires =<cmd>"))?;
                 }
                 "file-manager" => {
-                    cfg.file_manager = value
-                        .ok_or_else(|| anyhow::anyhow!("--file-manager requires =<cmd>"))?;
+                    cfg.file_manager =
+                        value.ok_or_else(|| anyhow::anyhow!("--file-manager requires =<cmd>"))?;
                 }
                 "help" | "h" => {
                     print_help();
@@ -238,8 +221,10 @@ mod tests {
 
     #[test]
     fn cli_overrides_config() {
-        let mut cfg = Config::default();
-        cfg.show_hidden = false;
+        let mut cfg = Config {
+            show_hidden: false,
+            ..Config::default()
+        };
         apply_cli(
             &mut cfg,
             vec![
@@ -258,5 +243,11 @@ mod tests {
     fn unknown_flag_errors() {
         let mut cfg = Config::default();
         assert!(apply_cli(&mut cfg, vec!["--wat".to_string()]).is_err());
+    }
+
+    #[test]
+    fn unknown_config_key_errors() {
+        let mut cfg = Config::default();
+        assert!(apply_toml(&mut cfg, "wat = true").is_err());
     }
 }

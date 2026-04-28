@@ -1,8 +1,8 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::{Action, App};
 use super::prompt::{Prompt, PromptKind};
+use super::{Action, App};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuItem {
@@ -20,7 +20,7 @@ impl MenuItem {
             MenuItem::NewFolder => "New Folder",
             MenuItem::NewFile => "New File",
             MenuItem::Rename => "Rename",
-            MenuItem::Delete => "Delete",
+            MenuItem::Delete => "Move to Trash",
             MenuItem::OpenFile => "Open File",
             MenuItem::OpenFolder => "Open Folder",
         }
@@ -85,9 +85,7 @@ impl App {
         };
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.menu = None,
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.menu = None
-            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.menu = None,
             KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') => {
                 if menu.selected > 0 {
                     menu.selected -= 1;
@@ -116,9 +114,18 @@ impl App {
     ) -> Result<Action> {
         match item {
             MenuItem::NewFile | MenuItem::NewFolder => {
-                let kind = if item == MenuItem::NewFile { PromptKind::NewFile } else { PromptKind::NewFolder };
+                let kind = if item == MenuItem::NewFile {
+                    PromptKind::NewFile
+                } else {
+                    PromptKind::NewFolder
+                };
                 let dir = self.menu_target_dir(target);
-                self.input = Some(Prompt { kind, buffer: String::new(), cursor: 0, target: dir });
+                self.input = Some(Prompt {
+                    kind,
+                    buffer: String::new(),
+                    cursor: 0,
+                    target: dir,
+                });
             }
             MenuItem::Rename => {
                 if let Some(idx) = target {

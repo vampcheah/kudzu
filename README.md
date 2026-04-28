@@ -65,7 +65,7 @@ Editor is resolved as `$EDITOR` → `$VISUAL` → `vi`.
 | `/` | Enter search mode |
 | `n` / `N` | New file / new folder |
 | `R` | Rename |
-| `D` | Delete (confirm with `y`) |
+| `D` | Move to trash (confirm with `y`) |
 | `M` | Open in file manager |
 | `.` | Toggle hidden files |
 | `i` | Toggle `.gitignore` handling |
@@ -91,7 +91,7 @@ Editor is resolved as `$EDITOR` → `$VISUAL` → `vi`.
 
 ## Configuration
 
-`~/.config/kudzu/config.toml` (or `$XDG_CONFIG_HOME/kudzu/config.toml`):
+`~/.config/kudzu/config.toml` (or `$XDG_CONFIG_HOME/kudzu/config.toml`) is parsed as TOML:
 
 ```toml
 show_hidden = false          # show hidden files at startup
@@ -101,6 +101,8 @@ gui_editor = "xdg-open"      # command for double_click = "gui", e.g. "code -n"
 file_manager = "xdg-open"    # command for M key; defaults to open/explorer on macOS/Windows
 osc7 = false                 # emit OSC 7 working-directory escape sequences
 ```
+
+`gui_editor` and `file_manager` support simple quoting, e.g. `"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" -n`.
 
 Command-line flags override config:
 

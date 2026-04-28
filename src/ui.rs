@@ -1,4 +1,3 @@
-
 use std::sync::OnceLock;
 
 static INDENT_CACHE: OnceLock<Vec<&'static str>> = OnceLock::new();
@@ -93,7 +92,9 @@ fn draw_context_menu(f: &mut Frame, app: &mut App, area: Rect) {
         .enumerate()
         .map(|(i, item)| {
             let style = if i == menu.selected {
-                Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .bg(SELECTED_BG)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
@@ -111,14 +112,23 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Mode::Normal => " NORMAL ",
         Mode::Search => " SEARCH ",
     };
-    let mode_style = Style::default().bg(ACCENT).fg(Color::Black).add_modifier(Modifier::BOLD);
-    let root_cow = app.tree.root.to_str()
+    let mode_style = Style::default()
+        .bg(ACCENT)
+        .fg(Color::Black)
+        .add_modifier(Modifier::BOLD);
+    let root_cow = app
+        .tree
+        .root
+        .to_str()
         .map(std::borrow::Cow::Borrowed)
         .unwrap_or_else(|| std::borrow::Cow::Owned(app.tree.root.display().to_string()));
     let spans = vec![
         Span::styled(mode_text, mode_style),
         Span::raw(" "),
-        Span::styled("kudzu", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "kudzu",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" · "),
         Span::raw(root_cow),
     ];
@@ -202,7 +212,11 @@ fn inner_rect(area: Rect) -> Rect {
 fn render_tree_row<'a>(node: &'a Node, selected: bool, highlight: &[u32]) -> ListItem<'a> {
     let indent: &'static str = get_indent(node.depth);
     let icon: &'static str = if node.is_dir {
-        if node.expanded { "▼ " } else { "▶ " }
+        if node.expanded {
+            "▼ "
+        } else {
+            "▶ "
+        }
     } else {
         "  "
     };
@@ -229,7 +243,10 @@ fn render_search_row<'a>(m: &'a SearchMatch, selected: bool) -> ListItem<'a> {
     if !m.parent_rel.is_empty() {
         spans.push(Span::raw("  "));
         spans.push(Span::raw("in "));
-        spans.push(Span::styled(m.parent_rel.as_str(), Style::default().fg(HIDDEN_FG)));
+        spans.push(Span::styled(
+            m.parent_rel.as_str(),
+            Style::default().fg(HIDDEN_FG),
+        ));
     }
     finish_row(spans, selected)
 }
@@ -248,7 +265,9 @@ fn base_style(is_dir: bool, is_hidden: bool, is_symlink: bool) -> Style {
 
 fn finish_row(spans: Vec<Span<'_>>, selected: bool) -> ListItem<'_> {
     let item_style = if selected {
-        Style::default().bg(SELECTED_BG).add_modifier(Modifier::BOLD)
+        Style::default()
+            .bg(SELECTED_BG)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -283,7 +302,10 @@ fn highlighted_name<'a>(name: &'a str, indices: &[u32], base: Style) -> Vec<Span
         }
     }
     if seg_start < name.len() {
-        spans.push(Span::styled(&name[seg_start..], if cur_hl { hl } else { base }));
+        spans.push(Span::styled(
+            &name[seg_start..],
+            if cur_hl { hl } else { base },
+        ));
     }
     spans
 }
@@ -298,7 +320,7 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
                 .unwrap_or_else(|| prompt.target.display().to_string());
             let line = Line::from(vec![
                 Span::styled(
-                    format!("delete {}? ", name),
+                    format!("move {} to trash? ", name),
                     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("(y/N)", Style::default().fg(HIDDEN_FG)),
@@ -315,7 +337,10 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
         let before: String = prompt.buffer.chars().take(prompt.cursor).collect();
         let after: String = prompt.buffer.chars().skip(prompt.cursor).collect();
         let line = Line::from(vec![
-            Span::styled(label, Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                label,
+                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            ),
             Span::raw(before),
             Span::styled("▏", Style::default().fg(ACCENT)),
             Span::raw(after),
@@ -326,7 +351,10 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
     match app.mode {
         Mode::Search => {
             let line = Line::from(vec![
-                Span::styled("/ ", Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "/ ",
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(app.search.query.as_str()),
                 Span::styled("▏", Style::default().fg(ACCENT)),
             ]);
@@ -405,7 +433,10 @@ const HELP_PAGES: &[HelpPage] = &[
     HelpPage {
         title: "Open",
         rows: &[
-            ("Enter / double-click", "expand dir or open file (editor or GUI, per config)"),
+            (
+                "Enter / double-click",
+                "expand dir or open file (editor or GUI, per config)",
+            ),
             ("o", "open file in editor"),
             ("M", "open in file manager"),
         ],
@@ -416,7 +447,7 @@ const HELP_PAGES: &[HelpPage] = &[
             ("n", "new file in selected dir"),
             ("N", "new folder in selected dir"),
             ("R", "rename selected"),
-            ("D", "delete selected (confirm y)"),
+            ("D", "move selected to trash (confirm y)"),
             ("right-click", "context menu"),
         ],
     },
@@ -450,7 +481,11 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
     let rows = page.rows;
 
     // Build content lines
-    let key_col = rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0);
+    let key_col = rows
+        .iter()
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0);
     let mut lines: Vec<Line> = rows
         .iter()
         .map(|(k, desc)| {
@@ -543,12 +578,7 @@ fn draw_help_overlay(f: &mut Frame, app: &App, area: Rect) {
 
     // Remaining lines: key bindings
     if inner.height > 1 {
-        let content_area = Rect::new(
-            inner.x,
-            inner.y + 1,
-            inner.width,
-            inner.height - 1,
-        );
+        let content_area = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
         f.render_widget(Paragraph::new(lines), content_area);
     }
 }
@@ -567,4 +597,3 @@ fn human_size(bytes: u64) -> String {
         format!("{:.1}{}", v, UNITS[unit])
     }
 }
-

@@ -13,6 +13,9 @@
 *.swo
 *~
 
+# Codex local workspace marker
+.codex
+
 # OS
 .DS_Store
 Thumbs.db

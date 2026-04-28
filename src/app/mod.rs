@@ -7,6 +7,7 @@ pub use menu::ContextMenu;
 pub use prompt::{Prompt, PromptKind};
 
 use std::{
+    collections::HashSet,
     env, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -193,7 +194,8 @@ impl App {
     pub(super) fn enter_search(&mut self) -> Result<()> {
         self.mode = Mode::Search;
         self.search.set_query("");
-        self.search.start_indexing(self.tree.root.clone(), self.tree.opts);
+        self.search
+            .start_indexing(self.tree.root.clone(), self.tree.opts);
         self.flash("indexing\u{2026}");
         Ok(())
     }
@@ -244,10 +246,8 @@ impl App {
                 }
             }
         }
-        if refreshed > 0 {
-            if self.selected >= self.tree.visible.len() {
-                self.selected = self.tree.visible.len().saturating_sub(1);
-            }
+        if refreshed > 0 && self.selected >= self.tree.visible.len() {
+            self.selected = self.tree.visible.len().saturating_sub(1);
         }
     }
 }
@@ -288,10 +288,12 @@ where
                 let changed = app.search.tick();
                 (Action::None, changed)
             }
-            AppEvent::IndexDone => {
-                app.search.indexing = false;
-                app.status.clear();
-                app.status_until = None;
+            AppEvent::IndexDone(generation) => {
+                if generation == app.search.current_generation() {
+                    app.search.indexing = false;
+                    app.status.clear();
+                    app.status_until = None;
+                }
                 (Action::None, true)
             }
             AppEvent::Tick => {
@@ -320,7 +322,7 @@ where
                 if is_image(&path) {
                     match spawn_detached(&app.cfg.gui_editor, &path) {
                         Ok(bin) => app.flash(format!("image → opened in {}", bin)),
-                        Err(e) => app.flash(format!("{}", e)),
+                        Err(e) => app.flash(e),
                     }
                 } else {
                     suspend_and_run(terminal, |_| {
@@ -333,18 +335,14 @@ where
                     app.flash(format!("opened {}", path.display()));
                 }
             }
-            Action::OpenInGui(path) => {
-                match spawn_detached(&app.cfg.gui_editor, &path) {
-                    Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
-                    Err(e) => app.flash(format!("{}", e)),
-                }
-            }
-            Action::OpenInFileManager(path) => {
-                match spawn_detached(&app.cfg.file_manager, &path) {
-                    Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
-                    Err(e) => app.flash(format!("{}", e)),
-                }
-            }
+            Action::OpenInGui(path) => match spawn_detached(&app.cfg.gui_editor, &path) {
+                Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
+                Err(e) => app.flash(e),
+            },
+            Action::OpenInFileManager(path) => match spawn_detached(&app.cfg.file_manager, &path) {
+                Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
+                Err(e) => app.flash(e),
+            },
         }
 
         if needs_draw {
@@ -358,7 +356,7 @@ where
 /// Spawn a detached process with all stdio connected to /dev/null.
 /// Returns the binary name on success or a `"bin: err"` string on failure.
 fn spawn_detached(cmd: &str, path: &Path) -> Result<String, String> {
-    let (bin, extra) = split_command(cmd);
+    let (bin, extra) = split_command(cmd)?;
     Command::new(&bin)
         .args(&extra)
         .arg(path)
@@ -383,8 +381,9 @@ fn is_image(path: &std::path::Path) -> bool {
 }
 
 fn apply_watch_delta(watcher: &mut FsWatcher, delta: WatchDelta) {
+    let added: HashSet<&Path> = delta.added.iter().map(PathBuf::as_path).collect();
     for p in &delta.removed {
-        if !delta.added.contains(p) {
+        if !added.contains(p.as_path()) {
             watcher.unwatch_dir(p);
         }
     }
@@ -393,14 +392,45 @@ fn apply_watch_delta(watcher: &mut FsWatcher, delta: WatchDelta) {
     }
 }
 
-/// Split a shell-ish command string on whitespace. First token is the
-/// program; the rest are preceding arguments (the selected path is
-/// appended afterward). Quoting is not supported — keep commands simple.
-fn split_command(cmd: &str) -> (String, Vec<String>) {
-    let mut parts = cmd.split_whitespace();
-    let bin = parts.next().unwrap_or("xdg-open").to_string();
-    let extra = parts.map(|s| s.to_string()).collect();
-    (bin, extra)
+/// Split a small shell-ish command string. Supports whitespace, single quotes,
+/// double quotes, and `\"` / `\\` escapes inside double quotes.
+fn split_command(cmd: &str) -> Result<(String, Vec<String>), String> {
+    let parts = parse_command(cmd)?;
+    let mut parts = parts.into_iter();
+    let bin = parts.next().unwrap_or_else(|| "xdg-open".to_string());
+    Ok((bin, parts.collect()))
+}
+
+fn parse_command(cmd: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = cmd.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some('"') if c == '\\' && matches!(chars.peek(), Some('"') | Some('\\')) => {
+                current.push(chars.next().expect("peeked char exists"));
+            }
+            Some(_) => current.push(c),
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None if c.is_whitespace() => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            None => current.push(c),
+        }
+    }
+
+    if let Some(q) = quote {
+        return Err(format!("unterminated quote `{}` in command", q));
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    Ok(out)
 }
 
 fn percent_encode_path(path: &str) -> String {
@@ -449,4 +479,28 @@ where
     )?;
     terminal.clear()?;
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_command_supports_quotes() {
+        let (bin, args) = split_command(r#""/opt/My Editor/bin/edit" -n "--flag=value""#).unwrap();
+        assert_eq!(bin, "/opt/My Editor/bin/edit");
+        assert_eq!(args, vec!["-n", "--flag=value"]);
+    }
+
+    #[test]
+    fn split_command_preserves_windows_backslashes() {
+        let (bin, args) = split_command(r#"C:\Tools\editor.exe "C:\Program Files""#).unwrap();
+        assert_eq!(bin, r#"C:\Tools\editor.exe"#);
+        assert_eq!(args, vec![r#"C:\Program Files"#]);
+    }
+
+    #[test]
+    fn split_command_rejects_unterminated_quote() {
+        assert!(split_command(r#""editor"#).is_err());
+    }
 }

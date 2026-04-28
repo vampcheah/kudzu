@@ -182,17 +182,16 @@ impl Tree {
 
         let old_watched = self.collect_watched_subtree(idx);
 
-        // Snapshot expansion state of surviving subdirectories (keyed by path).
-        let old: HashMap<PathBuf, bool> = self
-            .children_of(idx)
+        // Snapshot expanded directories throughout the refreshed subtree.
+        let descendants = self.collect_descendants(idx);
+        let old_expanded: HashSet<PathBuf> = descendants
             .iter()
             .copied()
             .filter(|&ci| self.nodes[ci].is_dir && self.nodes[ci].expanded)
-            .map(|ci| (self.nodes[ci].path.clone(), true))
+            .map(|ci| self.nodes[ci].path.clone())
             .collect();
 
-        let to_remove = self.collect_descendants(idx);
-        self.remove_nodes(&to_remove);
+        self.remove_nodes(&descendants);
 
         let idx = self.find_by_path(dir_path).expect("parent still present");
         self.nodes[idx].children_loaded = false;
@@ -202,17 +201,11 @@ impl Tree {
         let mut queue: Vec<usize> = self.children_of(idx).to_vec();
         while let Some(ci) = queue.pop() {
             let path = self.nodes[ci].path.clone();
-            if old.contains_key(&path) && self.nodes[ci].is_dir {
+            if old_expanded.contains(&path) && self.nodes[ci].is_dir {
                 self.nodes[ci].children_loaded = false;
                 self.load_children(ci)?;
                 self.nodes[ci].expanded = true;
-                // Deeper restoration: descendants of this subdir won't be
-                // restored further; acceptable for correctness.
-                let _ = 0;
-            }
-            // Check if any deeper expanded dirs from old snapshot are children of ci.
-            for &k in self.children_of(ci) {
-                if old.contains_key(&self.nodes[k].path) {
+                for &k in self.children_of(ci) {
                     queue.push(k);
                 }
             }
@@ -276,8 +269,7 @@ impl Tree {
         }
 
         // Rebuild path index.
-        let mut new_path_index: HashMap<PathBuf, usize> =
-            HashMap::with_capacity(new_nodes.len());
+        let mut new_path_index: HashMap<PathBuf, usize> = HashMap::with_capacity(new_nodes.len());
         for (new_i, n) in new_nodes.iter().enumerate() {
             new_path_index.insert(n.path.clone(), new_i);
         }
@@ -413,6 +405,28 @@ fn read_children(path: &Path, opts: &ScanOptions) -> Vec<Entry> {
     out
 }
 
+fn entry_from_dir_entry(path: &Path) -> Option<Entry> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let meta = fs::symlink_metadata(path).ok()?;
+    let is_symlink = meta.file_type().is_symlink();
+    // Resolve symlink for is_dir determination.
+    let is_dir = if is_symlink {
+        fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false)
+    } else {
+        meta.is_dir()
+    };
+    let name_lower = name.to_lowercase();
+    Some(Entry {
+        path: path.to_path_buf(),
+        is_hidden: name.starts_with('.'),
+        name,
+        name_lower,
+        is_dir,
+        is_symlink,
+        size: meta.len(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,6 +476,27 @@ mod tests {
         tree.refresh_dir(&root).unwrap();
         assert!(tree.find_by_path(&root.join("sub/deep.txt")).is_some());
         assert!(tree.find_by_path(&root.join("sibling.txt")).is_some());
+    }
+
+    #[test]
+    fn refresh_preserves_deep_expanded_subdir() {
+        let root = tmp("preserve-deep");
+        fs::create_dir_all(root.join("sub/deep")).unwrap();
+        fs::write(root.join("sub/deep/file.txt"), "").unwrap();
+        let mut tree = Tree::new(root.clone(), ScanOptions::default()).unwrap();
+        let sub = tree.find_by_path(&root.join("sub")).unwrap();
+        tree.toggle_expand(sub).unwrap();
+        let deep = tree.find_by_path(&root.join("sub/deep")).unwrap();
+        tree.toggle_expand(deep).unwrap();
+
+        fs::write(root.join("sibling.txt"), "").unwrap();
+        tree.refresh_dir(&root).unwrap();
+
+        let sub = tree.find_by_path(&root.join("sub")).unwrap();
+        let deep = tree.find_by_path(&root.join("sub/deep")).unwrap();
+        assert!(tree.nodes[sub].expanded);
+        assert!(tree.nodes[deep].expanded);
+        assert!(tree.find_by_path(&root.join("sub/deep/file.txt")).is_some());
     }
 
     #[test]
@@ -515,8 +550,10 @@ mod tests {
         fs::write(root.join("hidden.txt"), "").unwrap();
         fs::write(root.join("shown.txt"), "").unwrap();
 
-        let mut opts = ScanOptions::default();
-        opts.respect_gitignore = true;
+        let mut opts = ScanOptions {
+            respect_gitignore: true,
+            ..ScanOptions::default()
+        };
         let tree = Tree::new(root.clone(), opts).unwrap();
         assert!(tree.find_by_path(&root.join("hidden.txt")).is_none());
         assert!(tree.find_by_path(&root.join("shown.txt")).is_some());
@@ -543,26 +580,4 @@ mod tests {
         let tree = Tree::new(root.clone(), opts).unwrap();
         assert!(tree.find_by_path(&root.join(".env")).is_some());
     }
-}
-
-fn entry_from_dir_entry(path: &Path) -> Option<Entry> {
-    let name = path.file_name()?.to_string_lossy().into_owned();
-    let meta = fs::symlink_metadata(path).ok()?;
-    let is_symlink = meta.file_type().is_symlink();
-    // Resolve symlink for is_dir determination.
-    let is_dir = if is_symlink {
-        fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false)
-    } else {
-        meta.is_dir()
-    };
-    let name_lower = name.to_lowercase();
-    Some(Entry {
-        path: path.to_path_buf(),
-        is_hidden: name.starts_with('.'),
-        name,
-        name_lower,
-        is_dir,
-        is_symlink,
-        size: meta.len(),
-    })
 }

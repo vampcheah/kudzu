@@ -11,7 +11,7 @@ pub enum AppEvent {
     /// Nucleo has new match results ready; call search.tick().
     SearchUpdate,
     /// Background indexer finished walking the filesystem.
-    IndexDone,
+    IndexDone(u64),
 }
 
 pub struct EventLoop {

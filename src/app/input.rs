@@ -4,8 +4,8 @@ use crossterm::event::{
 };
 use std::time::{Duration, Instant};
 
-use crate::config::DoubleClick;
 use super::{Action, App, Mode, HELP_PAGES_LEN};
+use crate::config::DoubleClick;
 
 impl App {
     pub(super) fn on_key_normal(&mut self, key: KeyEvent) -> Result<Action> {
@@ -62,15 +62,13 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('f') => {
-                match self.descend_root()? {
-                    Some(new_root) => {
-                        self.flash(format!("root: {}", new_root.display()));
-                        return Ok(Action::RootChanged);
-                    }
-                    None => self.flash("select a subdirectory to focus"),
+            KeyCode::Char('f') => match self.descend_root()? {
+                Some(new_root) => {
+                    self.flash(format!("root: {}", new_root.display()));
+                    return Ok(Action::RootChanged);
                 }
-            }
+                None => self.flash("select a subdirectory to focus"),
+            },
             KeyCode::Char('o') => {
                 if let Some(idx) = self.selected_node() {
                     if !self.tree.nodes[idx].is_dir {
@@ -127,8 +125,7 @@ impl App {
                         if let Some(node_idx) = self.tree.find_by_path(&path) {
                             let _ = self.tree.expand(node_idx);
                             self.tree.rebuild_visible();
-                            if let Some(pos) =
-                                self.tree.visible.iter().position(|&i| i == node_idx)
+                            if let Some(pos) = self.tree.visible.iter().position(|&i| i == node_idx)
                             {
                                 self.selected = pos;
                             }
@@ -142,14 +139,20 @@ impl App {
             KeyCode::Up => self.search.move_selection(-1),
             KeyCode::PageDown => self.search.move_selection(10),
             KeyCode::PageUp => self.search.move_selection(-10),
-            KeyCode::Backspace => self.search.mutate_query(|q| { q.pop(); }),
+            KeyCode::Backspace => self.search.mutate_query(|q| {
+                q.pop();
+            }),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.exit_search()
             }
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.search.mutate_query(|q| {
-                    while matches!(q.chars().last(), Some(c) if c.is_whitespace()) { q.pop(); }
-                    while matches!(q.chars().last(), Some(c) if !c.is_whitespace()) { q.pop(); }
+                    while matches!(q.chars().last(), Some(c) if c.is_whitespace()) {
+                        q.pop();
+                    }
+                    while matches!(q.chars().last(), Some(c) if !c.is_whitespace()) {
+                        q.pop();
+                    }
                 });
             }
             KeyCode::Char(c) => self.search.mutate_query(|q| q.push(c)),
@@ -307,8 +310,7 @@ impl App {
                         if let Some(node_idx) = self.tree.find_by_path(&path) {
                             let _ = self.tree.expand(node_idx);
                             self.tree.rebuild_visible();
-                            if let Some(pos) =
-                                self.tree.visible.iter().position(|&i| i == node_idx)
+                            if let Some(pos) = self.tree.visible.iter().position(|&i| i == node_idx)
                             {
                                 self.selected = pos;
                             }

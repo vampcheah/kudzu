@@ -12,6 +12,9 @@ crossbeam-channel = "0.5"
 anyhow = "1"
 nucleo = "0.5"
 ignore = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+trash = "5"
 
 [profile.release]
 lto = "thin"

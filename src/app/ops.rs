@@ -1,10 +1,13 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{Action, App};
 use super::prompt::{Prompt, PromptKind};
+use super::{Action, App};
 
 impl App {
     /// Resolve the directory that should host a new file/folder, or that the
@@ -34,7 +37,12 @@ impl App {
     fn start_new(&mut self, kind: PromptKind) {
         match self.target_dir() {
             Some(dir) => {
-                self.input = Some(Prompt { kind, buffer: String::new(), cursor: 0, target: dir });
+                self.input = Some(Prompt {
+                    kind,
+                    buffer: String::new(),
+                    cursor: 0,
+                    target: dir,
+                });
             }
             None => self.flash("no target directory"),
         }
@@ -108,7 +116,7 @@ impl App {
                 KeyCode::Char('y') | KeyCode::Char('Y') => return self.confirm_prompt(),
                 _ => {
                     self.cancel_prompt();
-                    self.flash("delete cancelled");
+                    self.flash("trash cancelled");
                 }
             }
             return Ok(Action::None);
@@ -120,10 +128,18 @@ impl App {
                 return Ok(Action::None);
             }
             KeyCode::Enter => return self.confirm_prompt(),
-            KeyCode::Left | KeyCode::Char('b') if key.code == KeyCode::Left || ctrl => prompt.move_left(),
-            KeyCode::Right | KeyCode::Char('f') if key.code == KeyCode::Right || ctrl => prompt.move_right(),
-            KeyCode::Home | KeyCode::Char('a') if key.code == KeyCode::Home || ctrl => prompt.move_home(),
-            KeyCode::End | KeyCode::Char('e') if key.code == KeyCode::End || ctrl => prompt.move_end(),
+            KeyCode::Left | KeyCode::Char('b') if key.code == KeyCode::Left || ctrl => {
+                prompt.move_left()
+            }
+            KeyCode::Right | KeyCode::Char('f') if key.code == KeyCode::Right || ctrl => {
+                prompt.move_right()
+            }
+            KeyCode::Home | KeyCode::Char('a') if key.code == KeyCode::Home || ctrl => {
+                prompt.move_home()
+            }
+            KeyCode::End | KeyCode::Char('e') if key.code == KeyCode::End || ctrl => {
+                prompt.move_end()
+            }
             KeyCode::Backspace => prompt.delete_before(),
             KeyCode::Delete => prompt.delete_at(),
             KeyCode::Char('w') if ctrl => prompt.delete_word_before(),
@@ -188,7 +204,12 @@ impl App {
                         return Ok(Action::None);
                     }
                 };
-                if prompt.target.file_name().map(|s| s == name.as_str()).unwrap_or(false) {
+                if prompt
+                    .target
+                    .file_name()
+                    .map(|s| s == name.as_str())
+                    .unwrap_or(false)
+                {
                     return Ok(Action::None);
                 }
                 let new_path = parent.join(&name);
@@ -220,15 +241,8 @@ impl App {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| target.display().to_string());
         let prev_pos = self.selected;
-        let meta = fs::symlink_metadata(target);
-        let res = match meta {
-            Ok(m) if m.file_type().is_dir() && !m.file_type().is_symlink() => {
-                fs::remove_dir_all(target)
-            }
-            _ => fs::remove_file(target),
-        };
-        if let Err(e) = res {
-            self.flash(format!("delete failed: {}", e));
+        if let Err(e) = trash::delete(target) {
+            self.flash(format!("trash failed: {}", e));
             return Ok(Action::None);
         }
         self.post_mutation(&parent, None);
@@ -237,7 +251,7 @@ impl App {
         } else {
             self.selected = 0;
         }
-        self.flash(format!("deleted {}", name));
+        self.flash(format!("moved to trash: {}", name));
         Ok(Action::None)
     }
 

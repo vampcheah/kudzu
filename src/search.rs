@@ -9,14 +9,15 @@ use std::{
 
 use crossbeam_channel::Sender;
 use ignore::WalkBuilder;
-use nucleo::{Config, Matcher, Nucleo, Utf32Str};
 use nucleo::pattern::{CaseMatching, Normalization};
+use nucleo::{Config, Matcher, Nucleo, Utf32Str};
 
 use crate::event::AppEvent;
 use crate::tree::ScanOptions;
 
 /// Data stored per item inside the nucleo index.
 pub struct NodeHandle {
+    pub generation: u64,
     pub name: String,
     pub rel_path: String,
     pub parent_rel: String,
@@ -51,6 +52,7 @@ pub struct Search {
     /// Scratch buffer for highlight indices during rebuild.
     indices_buf: Vec<u32>,
     tx: Sender<AppEvent>,
+    generation: u64,
 }
 
 impl Search {
@@ -59,7 +61,10 @@ impl Search {
         let notify: Arc<dyn Fn() + Sync + Send> = Arc::new(move || {
             notify_tx.send(AppEvent::SearchUpdate).ok();
         });
-        let nucleo = Nucleo::new(Config::DEFAULT.match_paths(), notify, None, 2);
+        let workers = thread::available_parallelism()
+            .map(|n| n.get().clamp(2, 4))
+            .unwrap_or(2) as u32;
+        let nucleo = Nucleo::new(Config::DEFAULT.match_paths(), notify, None, workers);
         Self {
             query: String::new(),
             selected: 0,
@@ -70,12 +75,15 @@ impl Search {
             matcher: Matcher::new(Config::DEFAULT.match_paths()),
             indices_buf: Vec::new(),
             tx,
+            generation: 0,
         }
     }
 
     /// Cancel any running indexer, clear nucleo state, and start a fresh walk.
-    pub fn start_indexing(&mut self, root: PathBuf, opts: ScanOptions) {
+    pub fn start_indexing(&mut self, root: PathBuf, opts: ScanOptions) -> u64 {
         self.cancel.store(true, Ordering::Relaxed);
+        self.generation = self.generation.wrapping_add(1);
+        let generation = self.generation;
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = cancel.clone();
         self.indexing = true;
@@ -126,6 +134,7 @@ impl Search {
                 let is_symlink = ft.map(|t| t.is_symlink()).unwrap_or(false);
                 let is_hidden = name.starts_with('.');
                 let handle = NodeHandle {
+                    generation,
                     name,
                     rel_path,
                     parent_rel,
@@ -140,8 +149,9 @@ impl Search {
                 });
             }
             drop(injector);
-            tx.send(AppEvent::IndexDone).ok();
+            tx.send(AppEvent::IndexDone(generation)).ok();
         });
+        generation
     }
 
     /// Update the search query and reparse the nucleo pattern.
@@ -149,7 +159,13 @@ impl Search {
         let append = new_query.starts_with(self.query.as_str());
         self.query = new_query.to_string();
         for col in 0..2 {
-            self.nucleo.pattern.reparse(col, new_query, CaseMatching::Smart, Normalization::Smart, append);
+            self.nucleo.pattern.reparse(
+                col,
+                new_query,
+                CaseMatching::Smart,
+                Normalization::Smart,
+                append,
+            );
         }
         self.selected = 0;
     }
@@ -187,6 +203,10 @@ impl Search {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
+    pub fn current_generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Total number of items in the nucleo index (not just matches).
     pub fn nucleo_item_count(&self) -> u32 {
         self.nucleo.snapshot().item_count()
@@ -209,14 +229,16 @@ impl Search {
                 .filter_map(|i| {
                     let item = snapshot.get_matched_item(i)?;
                     let h = item.data;
-                    Some((
-                        h.name.clone(),
-                        h.parent_rel.clone(),
-                        h.is_dir,
-                        h.is_hidden,
-                        h.is_symlink,
-                        h.path.clone(),
-                    ))
+                    (h.generation == self.generation).then(|| {
+                        (
+                            h.name.clone(),
+                            h.parent_rel.clone(),
+                            h.is_dir,
+                            h.is_hidden,
+                            h.is_symlink,
+                            h.path.clone(),
+                        )
+                    })
                 })
                 .collect()
         };
@@ -249,7 +271,11 @@ impl Search {
 mod tests {
     use super::*;
     use crossbeam_channel::unbounded;
-    use std::{fs, path::PathBuf, time::{Duration, Instant}};
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{Duration, Instant},
+    };
 
     fn tmp(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("kudzu-search-{}-{}", tag, std::process::id()));
@@ -273,7 +299,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             s.tick();
-            if s.matches.len() > 0 {
+            if !s.matches.is_empty() {
                 break;
             }
             if Instant::now() > deadline {
@@ -281,9 +307,23 @@ mod tests {
             }
             let _ = rx.recv_timeout(Duration::from_millis(10));
         }
-        assert!(s.matches.len() > 0, "should find widget.rs");
+        assert!(!s.matches.is_empty(), "should find widget.rs");
         let m = s.selected_match().expect("should have a selection");
         assert!(m.path.ends_with("widget.rs"));
+    }
+
+    #[test]
+    fn indexing_generation_increments() {
+        let root = tmp("generation");
+        fs::write(root.join("file.txt"), "").unwrap();
+        let (tx, _rx) = unbounded::<AppEvent>();
+        let mut s = Search::new(tx);
+
+        let first = s.start_indexing(root.clone(), ScanOptions::default());
+        let second = s.start_indexing(root, ScanOptions::default());
+
+        assert_ne!(first, second);
+        assert_eq!(s.current_generation(), second);
     }
 
     #[test]

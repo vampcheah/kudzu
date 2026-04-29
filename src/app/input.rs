@@ -29,10 +29,8 @@ impl App {
             KeyCode::PageDown => self.tree_move(10),
             KeyCode::PageUp => self.tree_move(-10),
             KeyCode::Home | KeyCode::Char('g') => self.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => {
-                if !self.tree.visible.is_empty() {
-                    self.selected = self.tree.visible.len() - 1;
-                }
+            KeyCode::End | KeyCode::Char('G') if !self.tree.visible.is_empty() => {
+                self.selected = self.tree.visible.len() - 1;
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => {
                 if let Some(idx) = self.selected_node() {
@@ -208,15 +206,11 @@ impl App {
             && m.row < area.y + area.height;
 
         match m.kind {
-            MouseEventKind::ScrollDown => {
-                if inside {
-                    self.move_in_current_mode(3);
-                }
+            MouseEventKind::ScrollDown if inside => {
+                self.move_in_current_mode(3);
             }
-            MouseEventKind::ScrollUp => {
-                if inside {
-                    self.move_in_current_mode(-3);
-                }
+            MouseEventKind::ScrollUp if inside => {
+                self.move_in_current_mode(-3);
             }
             MouseEventKind::Down(MouseButton::Right) if inside && self.mode == Mode::Normal => {
                 let row_offset = (m.row - area.y) as usize;

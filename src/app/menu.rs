@@ -86,15 +86,13 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => self.menu = None,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.menu = None,
-            KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') => {
-                if menu.selected > 0 {
-                    menu.selected -= 1;
-                }
+            KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('k') if menu.selected > 0 => {
+                menu.selected -= 1;
             }
-            KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j') => {
-                if menu.selected + 1 < menu.items.len() {
-                    menu.selected += 1;
-                }
+            KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('j')
+                if menu.selected + 1 < menu.items.len() =>
+            {
+                menu.selected += 1;
             }
             KeyCode::Enter => {
                 let item = menu.items[menu.selected];

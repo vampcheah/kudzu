@@ -57,7 +57,7 @@ Editor is resolved as `$EDITOR` → `$VISUAL` → `vi`.
 | `l` / `→` / `Space` | Expand directory |
 | `f` | Focus into selected directory |
 | `Enter` | Expand dir or open file (per `double_click` config) |
-| `o` | Open file in `$EDITOR` |
+| `o` | Open file in `$EDITOR` (images/binary files use the system opener) |
 | `g` / `Home` | Jump to top |
 | `G` / `End` | Jump to bottom |
 | `Ctrl-d` / `PageDown` | Scroll down 10 |
@@ -98,16 +98,18 @@ show_hidden = false          # show hidden files at startup
 respect_gitignore = true     # respect .gitignore
 double_click = "editor"      # "editor" (terminal $EDITOR) or "gui" (GUI app)
 gui_editor = "xdg-open"      # command for double_click = "gui", e.g. "code -n"
+file_opener = "xdg-open"     # command for images/binary files; defaults to open/explorer on macOS/Windows
 file_manager = "xdg-open"    # command for M key; defaults to open/explorer on macOS/Windows
 osc7 = false                 # emit OSC 7 working-directory escape sequences
 ```
 
-`gui_editor` and `file_manager` support simple quoting, e.g. `"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" -n`.
+`gui_editor`, `file_opener`, and `file_manager` support simple quoting, e.g. `"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" -n`.
 
 Command-line flags override config:
 
 ```bash
 kudzu --show-hidden --double-click=gui --gui-editor=code
+kudzu --file-opener=xdg-open
 kudzu --no-ignore ~/projects
 kudzu --osc7                 # enable OSC 7 reports (e.g. for terminal tab titles)
 kudzu --help

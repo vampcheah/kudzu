@@ -15,6 +15,7 @@ pub struct Config {
     pub respect_gitignore: bool,
     pub double_click: DoubleClick,
     pub gui_editor: String,
+    pub file_opener: String,
     pub file_manager: String,
     pub osc7: bool,
     pub root: Option<PathBuf>,
@@ -26,7 +27,8 @@ impl Default for Config {
             show_hidden: false,
             respect_gitignore: true,
             double_click: DoubleClick::Editor,
-            gui_editor: "xdg-open".to_string(),
+            gui_editor: default_file_opener().to_string(),
+            file_opener: default_file_opener().to_string(),
             file_manager: default_file_manager().to_string(),
             osc7: false,
             root: None,
@@ -41,6 +43,7 @@ struct FileConfig {
     respect_gitignore: Option<bool>,
     double_click: Option<DoubleClick>,
     gui_editor: Option<String>,
+    file_opener: Option<String>,
     file_manager: Option<String>,
     osc7: Option<bool>,
 }
@@ -56,6 +59,10 @@ impl<'de> Deserialize<'de> for DoubleClick {
 }
 
 fn default_file_manager() -> &'static str {
+    default_file_opener()
+}
+
+fn default_file_opener() -> &'static str {
     std::cfg_select! {
         target_os = "macos" => "open",
         target_os = "windows" => "explorer",
@@ -106,6 +113,9 @@ fn apply_toml(cfg: &mut Config, text: &str) -> Result<()> {
     if let Some(v) = file.gui_editor {
         cfg.gui_editor = v;
     }
+    if let Some(v) = file.file_opener {
+        cfg.file_opener = v;
+    }
     if let Some(v) = file.file_manager {
         cfg.file_manager = v;
     }
@@ -148,6 +158,10 @@ fn apply_cli<I: IntoIterator<Item = String>>(cfg: &mut Config, args: I) -> Resul
                     cfg.gui_editor =
                         value.ok_or_else(|| anyhow::anyhow!("--gui-editor requires =<cmd>"))?;
                 }
+                "file-opener" => {
+                    cfg.file_opener =
+                        value.ok_or_else(|| anyhow::anyhow!("--file-opener requires =<cmd>"))?;
+                }
                 "file-manager" => {
                     cfg.file_manager =
                         value.ok_or_else(|| anyhow::anyhow!("--file-manager requires =<cmd>"))?;
@@ -184,7 +198,8 @@ fn print_help() {
              --ignore                 respect .gitignore (default)\n\
              --double-click=editor    double-click opens $EDITOR (default)\n\
              --double-click=gui       double-click spawns GUI editor\n\
-             --gui-editor=<cmd>       GUI editor command (default: xdg-open)\n\
+             --gui-editor=<cmd>       GUI editor command (default: system opener)\n\
+             --file-opener=<cmd>      system opener for images/binary files\n\
              --file-manager=<cmd>     file manager command (default: xdg-open/open/explorer)\n\
              --osc7                   emit OSC 7 working-directory reports\n\
              --no-osc7                disable OSC 7 reports (default)\n\
@@ -208,6 +223,7 @@ mod tests {
             respect_gitignore = false
             double_click = "gui"
             gui_editor = "code -n"   # trailing comment
+            file_opener = "xdg-open"
         "#;
         let mut cfg = Config::default();
         apply_toml(&mut cfg, text).unwrap();
@@ -215,6 +231,7 @@ mod tests {
         assert!(!cfg.respect_gitignore);
         assert_eq!(cfg.double_click, DoubleClick::Gui);
         assert_eq!(cfg.gui_editor, "code -n");
+        assert_eq!(cfg.file_opener, "xdg-open");
     }
 
     #[test]
@@ -228,12 +245,14 @@ mod tests {
             vec![
                 "--show-hidden".to_string(),
                 "--double-click=gui".to_string(),
+                "--file-opener=wslview".to_string(),
                 "/tmp".to_string(),
             ],
         )
         .unwrap();
         assert!(cfg.show_hidden);
         assert_eq!(cfg.double_click, DoubleClick::Gui);
+        assert_eq!(cfg.file_opener, "wslview");
         assert_eq!(cfg.root, Some(PathBuf::from("/tmp")));
     }
 

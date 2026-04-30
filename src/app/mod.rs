@@ -8,7 +8,7 @@ pub use prompt::{Prompt, PromptKind};
 
 use std::{
     collections::HashSet,
-    env, io,
+    env, fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -319,9 +319,9 @@ where
                 }
             }
             Action::OpenInEditor(path) => {
-                if is_image(&path) {
-                    match spawn_detached(&app.cfg.gui_editor, &path) {
-                        Ok(bin) => app.flash(format!("image → opened in {}", bin)),
+                if should_use_file_opener(&path) {
+                    match spawn_detached(&app.cfg.file_opener, &path) {
+                        Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
                         Err(e) => app.flash(e),
                     }
                 } else {
@@ -335,10 +335,17 @@ where
                     app.flash(format!("opened {}", path.display()));
                 }
             }
-            Action::OpenInGui(path) => match spawn_detached(&app.cfg.gui_editor, &path) {
-                Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
-                Err(e) => app.flash(e),
-            },
+            Action::OpenInGui(path) => {
+                let opener = if should_use_file_opener(&path) {
+                    &app.cfg.file_opener
+                } else {
+                    &app.cfg.gui_editor
+                };
+                match spawn_detached(opener, &path) {
+                    Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
+                    Err(e) => app.flash(e),
+                }
+            }
             Action::OpenInFileManager(path) => match spawn_detached(&app.cfg.file_manager, &path) {
                 Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
                 Err(e) => app.flash(e),
@@ -351,6 +358,10 @@ where
     }
 
     Ok(())
+}
+
+fn should_use_file_opener(path: &Path) -> bool {
+    is_image(path) || is_likely_binary(path)
 }
 
 /// Spawn a detached process with all stdio connected to /dev/null.
@@ -378,6 +389,29 @@ fn is_image(path: &std::path::Path) -> bool {
         .map(|e| e.to_ascii_lowercase())
         .map(|e| EXTS.contains(&e.as_str()))
         .unwrap_or(false)
+}
+
+fn is_likely_binary(path: &Path) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut sample = [0; 8192];
+    let n = {
+        use io::Read as _;
+        file.read(&mut sample).unwrap_or(0)
+    };
+    is_binary_sample(&sample[..n])
+}
+
+fn is_binary_sample(sample: &[u8]) -> bool {
+    sample.contains(&0) || std::str::from_utf8(sample).is_err()
 }
 
 fn apply_watch_delta(watcher: &mut FsWatcher, delta: WatchDelta) {
@@ -502,5 +536,12 @@ mod tests {
     #[test]
     fn split_command_rejects_unterminated_quote() {
         assert!(split_command(r#""editor"#).is_err());
+    }
+
+    #[test]
+    fn binary_sample_detection() {
+        assert!(!is_binary_sample(b"plain utf-8 text\n"));
+        assert!(is_binary_sample(b"\x89PNG\r\n\x1a\n\0"));
+        assert!(is_binary_sample(&[0xff, 0xfe, 0xfd]));
     }
 }

@@ -125,11 +125,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let spans = vec![
         Span::styled(mode_text, mode_style),
         Span::raw(" "),
-        Span::styled(
-            "kudzu",
-            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" · "),
         Span::raw(root_cow),
     ];
     let p = Paragraph::new(Line::from(spans));

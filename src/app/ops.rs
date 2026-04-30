@@ -219,9 +219,8 @@ impl App {
                         let (start, end) = if a <= c { (a, c) } else { (c, a) };
                         self.tree.visible[start..=end]
                             .iter()
-                            .filter_map(|&idx| {
-                                (idx != 0).then(|| self.tree.nodes[idx].path.clone())
-                            })
+                            .filter(|&&idx| idx != 0)
+                            .map(|&idx| self.tree.nodes[idx].path.clone())
                             .collect::<Vec<_>>()
                     }
                     _ => {
@@ -265,7 +264,8 @@ impl App {
                 .tree
                 .visible
                 .iter()
-                .filter_map(|&idx| (idx != 0).then(|| self.tree.nodes[idx].path.clone()))
+                .filter(|&&idx| idx != 0)
+                .map(|&idx| self.tree.nodes[idx].path.clone())
                 .collect::<Vec<_>>(),
             super::Mode::Search => self
                 .search
@@ -612,9 +612,9 @@ impl App {
         Ok(Action::None)
     }
 
-    pub(super) fn perform_delete(&mut self, target: &PathBuf) -> Result<Action> {
+    pub(super) fn perform_delete(&mut self, target: &Path) -> Result<Action> {
         let targets = if self.marked.is_empty() {
-            vec![target.clone()]
+            vec![target.to_path_buf()]
         } else {
             let mut paths: Vec<PathBuf> = self.marked.iter().cloned().collect();
             paths.sort();

@@ -196,7 +196,7 @@ fn apply_cli<I: IntoIterator<Item = String>>(cfg: &mut Config, args: I) -> Resul
                     std::process::exit(0);
                 }
                 "print-config" => {
-                    print!("{}", default_config_text(&cfg));
+                    print!("{}", default_config_text(cfg));
                     std::process::exit(0);
                 }
                 "init-config" => {
@@ -208,7 +208,7 @@ fn apply_cli<I: IntoIterator<Item = String>>(cfg: &mut Config, args: I) -> Resul
                     if let Some(parent) = path.parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    fs::write(&path, default_config_text(&cfg))?;
+                    fs::write(&path, default_config_text(cfg))?;
                     println!("created {}", path.display());
                     std::process::exit(0);
                 }

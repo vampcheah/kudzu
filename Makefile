@@ -3,7 +3,7 @@ BINDIR  = $(DESTDIR)$(PREFIX)/bin
 BIN     = kudzu
 TARGET  = target/release/$(BIN)
 
-.PHONY: all build install uninstall clean check-rust
+.PHONY: all build install uninstall clean check-rust ci fmt clippy test
 
 all: build
 
@@ -23,6 +23,17 @@ check-rust:
 
 build: check-rust
 	@. "$$HOME/.cargo/env" 2>/dev/null; cargo build --release
+
+ci: fmt clippy test
+
+fmt:
+	cargo fmt --check
+
+clippy:
+	cargo clippy --all-targets --all-features -- -D warnings
+
+test:
+	cargo test
 
 install: build
 	install -d $(BINDIR)

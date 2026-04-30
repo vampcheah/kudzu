@@ -1,4 +1,4 @@
-use std::{fs, io::Read, path::Path, sync::OnceLock};
+use std::sync::OnceLock;
 
 static INDENT_CACHE: OnceLock<Vec<&'static str>> = OnceLock::new();
 
@@ -289,121 +289,32 @@ fn render_search_row<'a>(m: &'a SearchMatch, selected: bool, marked: bool) -> Li
 }
 
 fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
-    let path = match app.mode {
-        Mode::Normal => app
-            .tree
-            .visible
-            .get(app.selected)
-            .map(|&idx| app.tree.nodes[idx].path.as_path()),
-        Mode::Search => app.search.selected_match().map(|m| m.path.as_path()),
-    };
-    let Some(path) = path else {
-        f.render_widget(
-            Paragraph::new("").block(Block::default().borders(Borders::ALL).title(" preview ")),
-            area,
-        );
-        return;
-    };
-    let lines = preview_lines(path, area.height.saturating_sub(2) as usize);
+    let lines: Vec<Line> = app
+        .preview
+        .current
+        .as_ref()
+        .map(|p| {
+            p.lines
+                .iter()
+                .take(area.height.saturating_sub(2) as usize)
+                .enumerate()
+                .map(|(i, line)| {
+                    if i == 0 {
+                        Line::from(Span::styled(
+                            line.clone(),
+                            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                        ))
+                    } else {
+                        Line::from(line.clone())
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     f.render_widget(
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" preview ")),
         area,
     );
-}
-
-fn preview_lines(path: &Path, max_lines: usize) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    let name = path
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
-    lines.push(Line::from(Span::styled(
-        name,
-        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-    )));
-    let Ok(meta) = fs::symlink_metadata(path) else {
-        lines.push(Line::from(Span::styled(
-            "unreadable",
-            Style::default().fg(Color::Red),
-        )));
-        return lines;
-    };
-    let kind = if meta.is_dir() {
-        "directory"
-    } else if meta.file_type().is_symlink() {
-        "symlink"
-    } else if meta.is_file() {
-        "file"
-    } else {
-        "special"
-    };
-    lines.push(Line::from(format!("{kind} · {}", human_size(meta.len()))));
-    if let Ok(modified) = meta.modified()
-        && let Ok(age) = modified.elapsed()
-    {
-        lines.push(Line::from(format!(
-            "modified {} ago",
-            human_duration(age.as_secs())
-        )));
-    }
-    lines.push(Line::from(""));
-
-    if meta.is_dir() {
-        let mut dirs = 0usize;
-        let mut files = 0usize;
-        if let Ok(read_dir) = fs::read_dir(path) {
-            for entry in read_dir.flatten().take(1000) {
-                if entry.path().is_dir() {
-                    dirs += 1;
-                } else {
-                    files += 1;
-                }
-            }
-        }
-        lines.push(Line::from(format!("{dirs} dirs · {files} files")));
-        return lines;
-    }
-
-    if !meta.is_file() {
-        return lines;
-    }
-    let mut file = match fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => {
-            lines.push(Line::from(Span::styled(
-                "unreadable",
-                Style::default().fg(Color::Red),
-            )));
-            return lines;
-        }
-    };
-    let mut buf = vec![0; 24 * 1024];
-    let n = file.read(&mut buf).unwrap_or(0);
-    buf.truncate(n);
-    if buf.contains(&0) || std::str::from_utf8(&buf).is_err() {
-        lines.push(Line::from(Span::styled(
-            "binary content",
-            Style::default().fg(HIDDEN_FG),
-        )));
-        return lines;
-    }
-    let text = String::from_utf8_lossy(&buf);
-    for line in text.lines().take(max_lines.saturating_sub(lines.len())) {
-        lines.push(Line::from(line.to_string()));
-    }
-    lines
-}
-
-fn human_duration(secs: u64) -> String {
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3600)
-    } else {
-        format!("{}d", secs / 86_400)
-    }
 }
 
 fn base_style(is_dir: bool, is_hidden: bool, is_symlink: bool) -> Style {
@@ -491,6 +402,7 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
             PromptKind::NewFile => "new file: ",
             PromptKind::NewFolder => "new folder: ",
             PromptKind::Rename => "rename: ",
+            PromptKind::Command => ":",
             PromptKind::Delete => unreachable!(),
         };
         let before: String = prompt.buffer.chars().take(prompt.cursor).collect();
@@ -564,6 +476,31 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::Magenta),
                 ));
             }
+            if let Some(op) = &app.operation {
+                right_spans.push(Span::raw("  "));
+                right_spans.push(Span::styled(
+                    format!("[{} {}/{}]", op.label, op.done, op.total),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            if app.undo.is_some() {
+                right_spans.push(Span::raw("  "));
+                right_spans.push(Span::styled("[undo]", Style::default().fg(Color::Blue)));
+            }
+            if !app.bookmarks.is_empty() {
+                right_spans.push(Span::raw("  "));
+                right_spans.push(Span::styled(
+                    format!("[{} bm]", app.bookmarks.len()),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            right_spans.push(Span::raw("  "));
+            right_spans.push(Span::styled(
+                format!("[conflict {}]", app.conflict_policy.label()),
+                Style::default().fg(HIDDEN_FG),
+            ));
             if !app.status.is_empty() {
                 right_spans.push(Span::raw("  "));
                 right_spans.push(Span::styled(
@@ -626,6 +563,9 @@ const HELP_PAGES: &[HelpPage] = &[
             ("R", "rename selected"),
             ("v / V / A", "mark · clear marks · mark visible"),
             ("y / x / p", "copy · cut · paste"),
+            ("C / z", "cycle conflict policy · undo"),
+            ("m / '", "bookmark directory · jump bookmark"),
+            (":", "command prompt"),
             ("D", "move selected or marked to trash (confirm y)"),
             ("right-click", "context menu"),
         ],
@@ -649,6 +589,7 @@ const HELP_PAGES: &[HelpPage] = &[
             ("↑ / ↓", "select match"),
             ("Enter", "jump to (open if file)"),
             ("Ctrl-o", "reveal match in tree"),
+            ("v / y / x / p", "mark · copy · cut · paste"),
             ("Backspace", "delete char"),
             ("Ctrl-w", "delete word"),
             ("Esc / Ctrl-c", "exit search"),

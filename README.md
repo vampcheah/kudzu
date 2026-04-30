@@ -45,7 +45,7 @@ kudzu ~/projects   # specify a root directory
 
 Editor is resolved as `$EDITOR` → `$VISUAL` → `vi`.
 
-On wide terminals, kudzu shows a preview pane with file metadata, text snippets, binary status, or directory counts.
+On wide terminals, kudzu shows a background-loaded preview pane with file metadata, text snippets, detected binary/media types, or directory counts. Content search also runs in the background.
 
 ## Key bindings
 
@@ -69,6 +69,9 @@ On wide terminals, kudzu shows a preview pane with file metadata, text snippets,
 | `R` | Rename |
 | `v` / `V` / `A` | Mark selected / clear marks / mark visible |
 | `y` / `x` / `p` | Copy / cut / paste selected or marked files |
+| `C` / `z` | Cycle conflict policy / undo last rename or paste |
+| `m` / `'` | Bookmark selected directory / jump through bookmarks |
+| `:` | Command prompt |
 | `D` | Move selected or marked files to trash (confirm with `y`) |
 | `M` | Open in file manager |
 | `.` | Toggle hidden files |
@@ -95,6 +98,10 @@ On wide terminals, kudzu shows a preview pane with file metadata, text snippets,
 - Click to select, double-click to expand dir or open file
 - Right-click for context menu (new file/folder, rename, delete, open)
 - Scroll to navigate
+
+### Command prompt
+
+Press `:` and type commands such as `copy`, `cut`, `paste`, `undo`, `bookmark`, `jump`, `rescan`, `open`, or `conflict rename|skip|overwrite`.
 
 ## Configuration
 

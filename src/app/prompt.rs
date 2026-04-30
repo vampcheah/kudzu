@@ -6,6 +6,7 @@ pub enum PromptKind {
     NewFolder,
     Rename,
     Delete,
+    Command,
 }
 
 #[derive(Debug, Clone)]
@@ -16,7 +17,7 @@ pub struct Prompt {
     pub cursor: usize,
     /// For NewFile/NewFolder: the parent directory the new entry will be
     /// created in. For Rename/Delete: the full path of the entry being
-    /// renamed or deleted.
+    /// renamed or deleted. For Command: the current root.
     pub target: PathBuf,
 }
 

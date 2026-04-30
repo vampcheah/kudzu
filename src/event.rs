@@ -12,6 +12,17 @@ pub enum AppEvent {
     SearchUpdate,
     /// Background indexer finished walking the filesystem.
     IndexDone(u64),
+    PreviewReady {
+        generation: u64,
+        path: PathBuf,
+        lines: Vec<String>,
+    },
+    ContentSearchDone {
+        generation: u64,
+        matches: Vec<crate::search::SearchMatch>,
+    },
+    OperationProgress(crate::app::OperationProgress),
+    OperationDone(crate::app::OperationResult),
 }
 
 pub struct EventLoop {

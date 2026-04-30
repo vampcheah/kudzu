@@ -1,13 +1,18 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    thread,
 };
 
 use anyhow::{Context, Result, bail};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::prompt::{Prompt, PromptKind};
-use super::{Action, App, Clipboard, ClipboardMode};
+use super::{
+    Action, App, Clipboard, ClipboardMode, ConflictPolicy, OperationProgress, OperationResult,
+    UndoAction,
+};
+use crate::filetype;
 
 impl App {
     /// Resolve the directory that should host a new file/folder, or that the
@@ -195,6 +200,10 @@ impl App {
     }
 
     pub(super) fn paste_clipboard(&mut self) -> Result<()> {
+        if self.operation.is_some() {
+            self.flash("operation already running");
+            return Ok(());
+        }
         let Some(clipboard) = self.clipboard.clone() else {
             self.flash("clipboard empty");
             return Ok(());
@@ -207,35 +216,106 @@ impl App {
             self.flash("paste target is not a directory");
             return Ok(());
         }
-        for src in &clipboard.paths {
-            let name = src
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("cannot paste {}", src.display()))?;
-            let dest = unique_destination(&target_dir.join(name));
-            match clipboard.mode {
-                ClipboardMode::Copy => copy_path(src, &dest)
-                    .with_context(|| format!("copy {} to {}", src.display(), dest.display()))?,
-                ClipboardMode::Move => fs::rename(src, &dest)
-                    .or_else(|_| {
-                        copy_path(src, &dest)?;
-                        remove_path(src)
-                    })
-                    .with_context(|| format!("move {} to {}", src.display(), dest.display()))?,
-            }
+        let tx = self.tx.clone();
+        let policy = self.conflict_policy;
+        let label = match clipboard.mode {
+            ClipboardMode::Copy => "copy",
+            ClipboardMode::Move => "move",
         }
-        if clipboard.mode == ClipboardMode::Move {
-            self.clipboard = None;
-            for p in clipboard.paths {
-                if let Some(parent) = p.parent() {
-                    let _ = self.tree.refresh_dir(parent);
-                }
-                self.marked.remove(&p);
-            }
-        }
-        self.tree.refresh_dir(&target_dir)?;
-        self.drain_watch();
-        self.flash("pasted");
+        .to_string();
+        self.operation = Some(OperationProgress {
+            label: label.clone(),
+            done: 0,
+            total: clipboard.paths.len(),
+            current: None,
+        });
+        thread::spawn(move || {
+            let result = run_paste_operation(label, clipboard, target_dir, policy, tx.clone());
+            let _ = tx.send(crate::event::AppEvent::OperationDone(result));
+        });
         Ok(())
+    }
+
+    pub(super) fn cycle_conflict_policy(&mut self) {
+        self.conflict_policy = match self.conflict_policy {
+            ConflictPolicy::Rename => ConflictPolicy::Skip,
+            ConflictPolicy::Skip => ConflictPolicy::Overwrite,
+            ConflictPolicy::Overwrite => ConflictPolicy::Rename,
+        };
+        self.flash(format!("conflicts: {}", self.conflict_policy.label()));
+    }
+
+    pub(super) fn add_bookmark(&mut self) {
+        let dir = self
+            .current_dir_for_paste()
+            .unwrap_or_else(|| self.tree.root.clone());
+        if !self.bookmarks.contains(&dir) {
+            self.bookmarks.push(dir.clone());
+        }
+        self.flash(format!("bookmarked {}", dir.display()));
+    }
+
+    pub(super) fn jump_bookmark(&mut self) -> Result<()> {
+        if self.bookmarks.is_empty() {
+            self.flash("no bookmarks");
+            return Ok(());
+        }
+        let dir = self.bookmarks.remove(0);
+        self.bookmarks.push(dir.clone());
+        self.replace_root(dir.clone())?;
+        self.selected = 0;
+        self.flash(format!("root: {}", dir.display()));
+        Ok(())
+    }
+
+    pub(super) fn undo_last(&mut self) -> Result<()> {
+        let Some(undo) = self.undo.take() else {
+            self.flash("nothing to undo");
+            return Ok(());
+        };
+        match undo {
+            UndoAction::Move { pairs } => {
+                let mut changed = Vec::new();
+                for (from, to) in pairs {
+                    if let Some(parent) = from.parent() {
+                        changed.push(parent.to_path_buf());
+                    }
+                    if let Some(parent) = to.parent() {
+                        changed.push(parent.to_path_buf());
+                    }
+                    fs::rename(&from, &to).with_context(|| {
+                        format!("undo move {} to {}", from.display(), to.display())
+                    })?;
+                }
+                refresh_dirs(self, changed);
+                self.flash("undo complete");
+            }
+            UndoAction::Delete { paths } => {
+                let mut changed = Vec::new();
+                for path in paths {
+                    if let Some(parent) = path.parent() {
+                        changed.push(parent.to_path_buf());
+                    }
+                    if path.is_dir() {
+                        fs::remove_dir_all(&path)?;
+                    } else if path.exists() {
+                        fs::remove_file(&path)?;
+                    }
+                }
+                refresh_dirs(self, changed);
+                self.flash("undo complete");
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn start_command(&mut self) {
+        self.input = Some(Prompt {
+            kind: PromptKind::Command,
+            buffer: String::new(),
+            cursor: 0,
+            target: self.tree.root.clone(),
+        });
     }
 
     pub(super) fn cancel_prompt(&mut self) {
@@ -294,6 +374,9 @@ impl App {
         if prompt.kind == PromptKind::Delete {
             return self.perform_delete(&prompt.target);
         }
+        if prompt.kind == PromptKind::Command {
+            return self.execute_command(prompt.buffer.trim());
+        }
         let name = prompt.buffer.trim().to_string();
         if name.is_empty() {
             self.flash("cancelled: empty name");
@@ -332,6 +415,7 @@ impl App {
                 self.flash(format!("created {}/", name));
             }
             PromptKind::Delete => unreachable!("handled above"),
+            PromptKind::Command => unreachable!("handled above"),
             PromptKind::Rename => {
                 let parent = match prompt.target.parent() {
                     Some(p) => p.to_path_buf(),
@@ -357,9 +441,46 @@ impl App {
                     self.flash(format!("rename failed: {}", e));
                     return Ok(Action::None);
                 }
+                self.undo = Some(UndoAction::Move {
+                    pairs: vec![(new_path.clone(), prompt.target.clone())],
+                });
                 self.post_mutation(&parent, Some(&new_path));
                 self.flash(format!("renamed → {}", name));
             }
+        }
+        Ok(Action::None)
+    }
+
+    fn execute_command(&mut self, command: &str) -> Result<Action> {
+        let mut parts = command.split_whitespace();
+        match parts.next().unwrap_or("") {
+            "" => self.flash("cancelled"),
+            "q" | "quit" => self.should_quit = true,
+            "help" => self.show_help = true,
+            "rescan" | "r" => {
+                self.tree.rescan()?;
+                self.flash("rescanned");
+            }
+            "copy" | "yank" => self.stage_clipboard(ClipboardMode::Copy),
+            "cut" => self.stage_clipboard(ClipboardMode::Move),
+            "paste" => self.paste_clipboard()?,
+            "mark" => self.toggle_mark_current(),
+            "clear" => self.clear_marks(),
+            "bookmark" => self.add_bookmark(),
+            "jump" => self.jump_bookmark()?,
+            "undo" => self.undo_last()?,
+            "conflict" => match parts.next() {
+                Some("rename") => self.conflict_policy = ConflictPolicy::Rename,
+                Some("skip") => self.conflict_policy = ConflictPolicy::Skip,
+                Some("overwrite") => self.conflict_policy = ConflictPolicy::Overwrite,
+                _ => self.cycle_conflict_policy(),
+            },
+            "open" => {
+                if let Some(path) = self.current_path() {
+                    return Ok(Action::OpenInEditor(path));
+                }
+            }
+            other => self.flash(format!("unknown command: {other}")),
         }
         Ok(Action::None)
     }
@@ -435,9 +556,7 @@ impl App {
 }
 
 fn short_path(path: &Path) -> String {
-    path.file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
+    filetype::short_path(path)
 }
 
 fn unique_destination(path: &Path) -> PathBuf {
@@ -461,6 +580,98 @@ fn unique_destination(path: &Path) -> PathBuf {
         }
     }
     unreachable!("unbounded loop returns")
+}
+
+fn run_paste_operation(
+    label: String,
+    clipboard: Clipboard,
+    target_dir: PathBuf,
+    policy: ConflictPolicy,
+    tx: crossbeam_channel::Sender<crate::event::AppEvent>,
+) -> OperationResult {
+    let total = clipboard.paths.len();
+    let mut errors = Vec::new();
+    let mut undo_pairs = Vec::new();
+    let mut copied_paths = Vec::new();
+    let mut changed_dirs = vec![target_dir.clone()];
+    let mut moved_paths = Vec::new();
+    for (i, src) in clipboard.paths.iter().enumerate() {
+        let _ = tx.send(crate::event::AppEvent::OperationProgress(
+            OperationProgress {
+                label: label.clone(),
+                done: i,
+                total,
+                current: Some(src.clone()),
+            },
+        ));
+        let Some(name) = src.file_name() else {
+            errors.push(format!("cannot paste {}", src.display()));
+            continue;
+        };
+        let Some(dest) = resolve_destination(&target_dir.join(name), policy) else {
+            continue;
+        };
+        let res = match clipboard.mode {
+            ClipboardMode::Copy => copy_path(src, &dest),
+            ClipboardMode::Move => fs::rename(src, &dest).or_else(|_| {
+                copy_path(src, &dest)?;
+                remove_path(src)
+            }),
+        };
+        match res {
+            Ok(()) => {
+                copied_paths.push(dest.clone());
+                if clipboard.mode == ClipboardMode::Move {
+                    moved_paths.push(src.clone());
+                    undo_pairs.push((dest, src.clone()));
+                    if let Some(parent) = src.parent() {
+                        changed_dirs.push(parent.to_path_buf());
+                    }
+                }
+            }
+            Err(e) => errors.push(format!("{}: {}", src.display(), e)),
+        }
+    }
+    let _ = tx.send(crate::event::AppEvent::OperationProgress(
+        OperationProgress {
+            label: label.clone(),
+            done: total,
+            total,
+            current: None,
+        },
+    ));
+    changed_dirs.sort();
+    changed_dirs.dedup();
+    let undo = match clipboard.mode {
+        ClipboardMode::Copy if !copied_paths.is_empty() => Some(UndoAction::Delete {
+            paths: copied_paths,
+        }),
+        ClipboardMode::Move if !undo_pairs.is_empty() => {
+            Some(UndoAction::Move { pairs: undo_pairs })
+        }
+        _ => None,
+    };
+    OperationResult {
+        label,
+        changed_dirs,
+        moved_paths,
+        undo,
+        errors,
+    }
+}
+
+fn resolve_destination(path: &Path, policy: ConflictPolicy) -> Option<PathBuf> {
+    if !path.exists() {
+        return Some(path.to_path_buf());
+    }
+    match policy {
+        ConflictPolicy::Rename => Some(unique_destination(path)),
+        ConflictPolicy::Skip => None,
+        ConflictPolicy::Overwrite => {
+            let _ = remove_path(path);
+            Some(path.to_path_buf())
+        }
+    }
 }
 
 fn copy_path(src: &Path, dest: &Path) -> Result<()> {
@@ -487,6 +698,17 @@ fn copy_path(src: &Path, dest: &Path) -> Result<()> {
         bail!("unsupported file type: {}", src.display());
     }
     Ok(())
+}
+
+fn refresh_dirs(app: &mut App, dirs: Vec<PathBuf>) {
+    let mut dirs = dirs;
+    dirs.sort();
+    dirs.dedup();
+    for dir in dirs {
+        let _ = app.tree.refresh_dir(&dir);
+    }
+    app.tree.rebuild_visible();
+    app.drain_watch();
 }
 
 fn remove_path(path: &Path) -> Result<()> {

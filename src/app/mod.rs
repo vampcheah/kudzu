@@ -8,7 +8,7 @@ pub use prompt::{Prompt, PromptKind};
 
 use std::{
     collections::HashSet,
-    env, fs, io,
+    env, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{Duration, Instant},
@@ -26,6 +26,8 @@ use ratatui::{Terminal, backend::Backend, layout::Rect};
 use crate::{
     config::Config,
     event::{AppEvent, EventLoop},
+    filetype,
+    preview::PreviewState,
     search::Search,
     tree::{ScanOptions, Tree, WatchDelta},
     ui,
@@ -57,10 +59,50 @@ pub enum ClipboardMode {
     Move,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConflictPolicy {
+    Rename,
+    Skip,
+    Overwrite,
+}
+
+impl ConflictPolicy {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Rename => "rename",
+            Self::Skip => "skip",
+            Self::Overwrite => "overwrite",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Clipboard {
     pub mode: ClipboardMode,
     pub paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OperationProgress {
+    pub label: String,
+    pub done: usize,
+    pub total: usize,
+    pub current: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OperationResult {
+    pub label: String,
+    pub changed_dirs: Vec<PathBuf>,
+    pub moved_paths: Vec<PathBuf>,
+    pub undo: Option<UndoAction>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum UndoAction {
+    Move { pairs: Vec<(PathBuf, PathBuf)> },
+    Delete { paths: Vec<PathBuf> },
 }
 
 pub struct App {
@@ -73,6 +115,7 @@ pub struct App {
     pub mode: Mode,
     pub search: Search,
     pub cfg: Config,
+    pub tx: Sender<AppEvent>,
     pub show_help: bool,
     pub help_tab: usize,
     /// Inner rect of the currently rendered list (set by the UI each frame);
@@ -85,6 +128,11 @@ pub struct App {
     pub menu: Option<ContextMenu>,
     pub marked: HashSet<PathBuf>,
     pub clipboard: Option<Clipboard>,
+    pub conflict_policy: ConflictPolicy,
+    pub operation: Option<OperationProgress>,
+    pub undo: Option<UndoAction>,
+    pub bookmarks: Vec<PathBuf>,
+    pub preview: PreviewState,
     /// Screen rect of the context menu popup (set by UI each frame while
     /// the menu is visible). Used by mouse handlers to hit-test clicks.
     pub menu_rect: Option<Rect>,
@@ -111,6 +159,7 @@ impl App {
             mode: Mode::Normal,
             search: Search::new(tx.clone()),
             cfg,
+            tx,
             show_help: false,
             help_tab: 0,
             list_area: None,
@@ -119,6 +168,11 @@ impl App {
             menu: None,
             marked: HashSet::new(),
             clipboard: None,
+            conflict_policy: ConflictPolicy::Rename,
+            operation: None,
+            undo: None,
+            bookmarks: Vec::new(),
+            preview: PreviewState::default(),
             menu_rect: None,
             last_click: None,
             watcher,
@@ -130,7 +184,7 @@ impl App {
         apply_watch_delta(&mut self.watcher, delta);
     }
 
-    fn replace_root(&mut self, new_root: PathBuf) -> Result<()> {
+    pub(super) fn replace_root(&mut self, new_root: PathBuf) -> Result<()> {
         let opts = self.tree.opts;
         self.watcher.unwatch_all();
         self.tree = Tree::new(new_root, opts)?;
@@ -266,6 +320,50 @@ impl App {
             self.selected = self.tree.visible.len().saturating_sub(1);
         }
     }
+
+    pub(super) fn selected_preview_path(&self) -> Option<PathBuf> {
+        match self.mode {
+            Mode::Normal => self
+                .tree
+                .visible
+                .get(self.selected)
+                .map(|&idx| self.tree.nodes[idx].path.clone()),
+            Mode::Search => self.search.selected_match().map(|m| m.path.clone()),
+        }
+    }
+
+    pub(super) fn request_preview(&mut self) {
+        if let Some(path) = self.selected_preview_path() {
+            self.preview.request(path, self.tx.clone());
+        }
+    }
+
+    pub(super) fn accept_operation_result(&mut self, result: OperationResult) {
+        for dir in &result.changed_dirs {
+            let _ = self.tree.refresh_dir(dir);
+        }
+        self.tree.rebuild_visible();
+        self.drain_watch();
+        for p in &result.moved_paths {
+            self.marked.remove(p);
+        }
+        if !result.moved_paths.is_empty() {
+            self.clipboard = None;
+        }
+        if let Some(undo) = result.undo {
+            self.undo = Some(undo);
+        }
+        self.operation = None;
+        if result.errors.is_empty() {
+            self.flash(format!("{} done", result.label));
+        } else {
+            self.flash(format!(
+                "{} done with {} errors",
+                result.label,
+                result.errors.len()
+            ));
+        }
+    }
 }
 
 pub fn run<B: Backend + io::Write>(
@@ -310,6 +408,26 @@ where
                     app.status.clear();
                     app.status_until = None;
                 }
+                (Action::None, true)
+            }
+            AppEvent::PreviewReady {
+                generation,
+                path,
+                lines,
+            } => (Action::None, app.preview.accept(generation, path, lines)),
+            AppEvent::ContentSearchDone {
+                generation,
+                matches,
+            } => (
+                Action::None,
+                app.search.accept_content_results(generation, matches),
+            ),
+            AppEvent::OperationProgress(progress) => {
+                app.operation = Some(progress);
+                (Action::None, true)
+            }
+            AppEvent::OperationDone(result) => {
+                app.accept_operation_result(result);
                 (Action::None, true)
             }
             AppEvent::Tick => {
@@ -368,6 +486,7 @@ where
             },
         }
 
+        app.request_preview();
         if needs_draw {
             terminal.draw(|f| ui::draw(f, &mut app))?;
         }
@@ -377,7 +496,7 @@ where
 }
 
 fn should_use_file_opener(path: &Path) -> bool {
-    is_image(path) || is_likely_binary(path)
+    filetype::detect_path(path).should_use_file_opener()
 }
 
 /// Spawn a detached process with all stdio connected to /dev/null.
@@ -393,41 +512,6 @@ fn spawn_detached(cmd: &str, path: &Path) -> Result<String, String> {
         .spawn()
         .map(|_| bin.clone())
         .map_err(|e| format!("{}: {}", bin, e))
-}
-
-fn is_image(path: &std::path::Path) -> bool {
-    const EXTS: &[&str] = &[
-        "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "ico", "tiff", "tif", "avif", "heic",
-        "heif",
-    ];
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .map(|e| EXTS.contains(&e.as_str()))
-        .unwrap_or(false)
-}
-
-fn is_likely_binary(path: &Path) -> bool {
-    let Ok(meta) = fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-
-    let Ok(mut file) = fs::File::open(path) else {
-        return false;
-    };
-    let mut sample = [0; 8192];
-    let n = {
-        use io::Read as _;
-        file.read(&mut sample).unwrap_or(0)
-    };
-    is_binary_sample(&sample[..n])
-}
-
-fn is_binary_sample(sample: &[u8]) -> bool {
-    sample.contains(&0) || std::str::from_utf8(sample).is_err()
 }
 
 fn apply_watch_delta(watcher: &mut FsWatcher, delta: WatchDelta) {
@@ -556,8 +640,17 @@ mod tests {
 
     #[test]
     fn binary_sample_detection() {
-        assert!(!is_binary_sample(b"plain utf-8 text\n"));
-        assert!(is_binary_sample(b"\x89PNG\r\n\x1a\n\0"));
-        assert!(is_binary_sample(&[0xff, 0xfe, 0xfd]));
+        assert_eq!(
+            filetype::detect_sample(Path::new("plain.txt"), b"plain utf-8 text\n"),
+            filetype::FileKind::Text
+        );
+        assert_eq!(
+            filetype::detect_sample(Path::new("image"), b"\x89PNG\r\n\x1a\n\0"),
+            filetype::FileKind::Image
+        );
+        assert_eq!(
+            filetype::detect_sample(Path::new("bin"), &[0xff, 0xfe, 0xfd]),
+            filetype::FileKind::Binary
+        );
     }
 }

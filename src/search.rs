@@ -1,7 +1,7 @@
 use std::{
     fs,
     io::Read,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -30,6 +30,7 @@ pub struct NodeHandle {
 }
 
 /// A pre-rendered snapshot of a single nucleo match, rebuilt on every tick.
+#[derive(Debug, Clone)]
 pub struct SearchMatch {
     pub indices: Vec<u32>,
     pub parent_rel: String,
@@ -64,6 +65,7 @@ pub struct Search {
     indices_buf: Vec<u32>,
     tx: Sender<AppEvent>,
     generation: u64,
+    content_generation: u64,
     root: Option<PathBuf>,
     opts: ScanOptions,
 }
@@ -90,6 +92,7 @@ impl Search {
             indices_buf: Vec::new(),
             tx,
             generation: 0,
+            content_generation: 0,
             root: None,
             opts: ScanOptions::default(),
         }
@@ -177,7 +180,7 @@ impl Search {
         let append = new_query.starts_with(self.query.as_str());
         self.query = new_query.to_string();
         if self.kind == SearchKind::Content {
-            self.rebuild_content_matches();
+            self.start_content_search();
             self.selected = 0;
             return;
         }
@@ -327,7 +330,7 @@ impl Search {
         }
     }
 
-    fn rebuild_content_matches(&mut self) {
+    fn start_content_search(&mut self) {
         self.matches.clear();
         let query = self.query.trim().to_ascii_lowercase();
         if query.is_empty() {
@@ -336,78 +339,113 @@ impl Search {
         let Some(root) = self.root.clone() else {
             return;
         };
-        let walker = WalkBuilder::new(&root)
-            .hidden(!self.opts.show_hidden)
-            .git_ignore(self.opts.respect_gitignore)
-            .git_global(self.opts.respect_gitignore)
-            .git_exclude(self.opts.respect_gitignore)
-            .parents(self.opts.respect_gitignore)
-            .require_git(false)
-            .build();
+        self.indexing = true;
+        self.content_generation = self.content_generation.wrapping_add(1);
+        let generation = self.content_generation;
+        let opts = self.opts;
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let matches = content_matches(&root, opts, &query, 500);
+            let _ = tx.send(AppEvent::ContentSearchDone {
+                generation,
+                matches,
+            });
+        });
+    }
 
-        for result in walker {
-            if self.matches.len() >= 500 {
-                break;
+    pub fn accept_content_results(&mut self, generation: u64, matches: Vec<SearchMatch>) -> bool {
+        if self.kind != SearchKind::Content || generation != self.content_generation {
+            return false;
+        }
+        self.matches = matches;
+        self.selected = self.selected.min(self.matches.len().saturating_sub(1));
+        self.indexing = false;
+        true
+    }
+}
+
+pub fn content_matches(
+    root: &Path,
+    opts: ScanOptions,
+    query: &str,
+    limit: usize,
+) -> Vec<SearchMatch> {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let walker = WalkBuilder::new(root)
+        .hidden(!opts.show_hidden)
+        .git_ignore(opts.respect_gitignore)
+        .git_global(opts.respect_gitignore)
+        .git_exclude(opts.respect_gitignore)
+        .parents(opts.respect_gitignore)
+        .require_git(false)
+        .build();
+    let mut out = Vec::new();
+    for result in walker {
+        if out.len() >= limit {
+            break;
+        }
+        let Ok(entry) = result else {
+            continue;
+        };
+        let Some(ft) = entry.file_type() else {
+            continue;
+        };
+        if !ft.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(meta) = fs::metadata(path) else {
+            continue;
+        };
+        if meta.len() > 1024 * 1024 {
+            continue;
+        }
+        let Ok(mut file) = fs::File::open(path) else {
+            continue;
+        };
+        let mut buf = Vec::new();
+        if file.read_to_end(&mut buf).is_err()
+            || buf.contains(&0)
+            || std::str::from_utf8(&buf).is_err()
+        {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&buf);
+        for (line_no, line) in text.lines().enumerate() {
+            if !line.to_ascii_lowercase().contains(&query) {
+                continue;
             }
-            let Ok(entry) = result else {
-                continue;
-            };
-            let Some(ft) = entry.file_type() else {
-                continue;
-            };
-            if !ft.is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let Ok(meta) = fs::metadata(path) else {
-                continue;
-            };
-            if meta.len() > 1024 * 1024 {
-                continue;
-            }
-            let Ok(mut file) = fs::File::open(path) else {
-                continue;
-            };
-            let mut buf = Vec::new();
-            if file.read_to_end(&mut buf).is_err()
-                || buf.contains(&0)
-                || std::str::from_utf8(&buf).is_err()
-            {
-                continue;
-            }
-            let text = String::from_utf8_lossy(&buf);
-            for (line_no, line) in text.lines().enumerate() {
-                if !line.to_ascii_lowercase().contains(&query) {
-                    continue;
-                }
-                let name = path
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let parent_rel = path
+                .strip_prefix(root)
+                .ok()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            out.push(SearchMatch {
+                indices: Vec::new(),
+                parent_rel,
+                name,
+                is_dir: false,
+                is_hidden: path
                     .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let parent_rel = path
-                    .strip_prefix(&root)
-                    .ok()
-                    .and_then(|p| p.parent())
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                self.matches.push(SearchMatch {
-                    indices: Vec::new(),
-                    parent_rel,
-                    name,
-                    is_dir: false,
-                    is_hidden: path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| n.starts_with('.'))
-                        .unwrap_or(false),
-                    is_symlink: ft.is_symlink(),
-                    path: path.to_path_buf(),
-                    detail: Some(format!("{}: {}", line_no + 1, line.trim())),
-                });
-                break;
-            }
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with('.'))
+                    .unwrap_or(false),
+                is_symlink: ft.is_symlink(),
+                path: path.to_path_buf(),
+                detail: Some(format!("{}: {}", line_no + 1, line.trim())),
+            });
+            break;
         }
     }
+    out
 }
 
 #[cfg(test)]
@@ -481,14 +519,10 @@ mod tests {
         let root = tmp("content");
         fs::write(root.join("notes.txt"), "alpha\nneedle here\n").unwrap();
         fs::write(root.join("bin.dat"), b"\0needle").unwrap();
-        let (tx, _rx) = unbounded::<AppEvent>();
-        let mut s = Search::new(tx);
-        s.start_indexing(root.clone(), ScanOptions::default());
-        s.kind = SearchKind::Content;
-        s.set_query("needle");
+        let matches = content_matches(&root, ScanOptions::default(), "needle", 500);
 
-        assert_eq!(s.matches.len(), 1);
-        assert!(s.matches[0].path.ends_with("notes.txt"));
-        assert!(s.matches[0].detail.as_deref().unwrap().contains("needle"));
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].path.ends_with("notes.txt"));
+        assert!(matches[0].detail.as_deref().unwrap().contains("needle"));
     }
 }

@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "kudzu"
-version = "1.3.3"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",

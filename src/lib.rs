@@ -1,6 +1,8 @@
 pub mod app;
 pub mod config;
 pub mod event;
+pub mod filetype;
+pub mod preview;
 pub mod search;
 pub mod tree;
 pub mod ui;

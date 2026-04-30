@@ -84,7 +84,12 @@ impl App {
             KeyCode::Char('y') => self.stage_clipboard(ClipboardMode::Copy),
             KeyCode::Char('x') => self.stage_clipboard(ClipboardMode::Move),
             KeyCode::Char('p') => self.paste_clipboard()?,
+            KeyCode::Char('z') => self.undo_last()?,
+            KeyCode::Char('C') => self.cycle_conflict_policy(),
+            KeyCode::Char('m') => self.add_bookmark(),
+            KeyCode::Char('\'') => self.jump_bookmark()?,
             KeyCode::Char('M') => return Ok(self.open_selected_in_filemanager()),
+            KeyCode::Char(':') => self.start_command(),
             KeyCode::Char('/') => self.enter_search()?,
             KeyCode::Char('h') => self.show_help = true,
             KeyCode::Char('.') => {

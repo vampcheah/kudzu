@@ -157,17 +157,23 @@ impl App {
             self.flash("nothing selected");
             return;
         };
+        self.toggle_mark_path(path);
+    }
+
+    pub(super) fn toggle_mark_path(&mut self, path: PathBuf) {
         if self.marked.remove(&path) {
             self.flash(format!("unmarked {}", short_path(&path)));
         } else {
             self.marked.insert(path.clone());
             self.flash(format!("marked {}", short_path(&path)));
         }
+        self.mark_anchor = Some(path);
     }
 
     pub(super) fn clear_marks(&mut self) {
         let count = self.marked.len();
         self.marked.clear();
+        self.mark_anchor = None;
         self.flash(format!("cleared {count} marks"));
     }
 
@@ -182,6 +188,113 @@ impl App {
             }
         }
         self.flash(format!("marked {}", self.marked.len()));
+    }
+
+    pub(super) fn mark_range_to_current(&mut self) {
+        let Some(current) = self.current_path() else {
+            self.flash("nothing selected");
+            return;
+        };
+        let Some(anchor) = self.mark_anchor.clone() else {
+            self.marked.insert(current.clone());
+            self.mark_anchor = Some(current.clone());
+            self.flash(format!("marked {}", short_path(&current)));
+            return;
+        };
+
+        let paths = match self.mode {
+            super::Mode::Normal => {
+                let anchor_pos = self
+                    .tree
+                    .visible
+                    .iter()
+                    .position(|&idx| self.tree.nodes[idx].path == anchor);
+                let current_pos = self
+                    .tree
+                    .visible
+                    .iter()
+                    .position(|&idx| self.tree.nodes[idx].path == current);
+                match (anchor_pos, current_pos) {
+                    (Some(a), Some(c)) => {
+                        let (start, end) = if a <= c { (a, c) } else { (c, a) };
+                        self.tree.visible[start..=end]
+                            .iter()
+                            .filter_map(|&idx| {
+                                (idx != 0).then(|| self.tree.nodes[idx].path.clone())
+                            })
+                            .collect::<Vec<_>>()
+                    }
+                    _ => {
+                        self.mark_anchor = Some(current.clone());
+                        self.marked.insert(current.clone());
+                        self.flash("range anchor is no longer visible");
+                        return;
+                    }
+                }
+            }
+            super::Mode::Search => {
+                let anchor_pos = self.search.matches.iter().position(|m| m.path == anchor);
+                let current_pos = self.search.matches.iter().position(|m| m.path == current);
+                match (anchor_pos, current_pos) {
+                    (Some(a), Some(c)) => {
+                        let (start, end) = if a <= c { (a, c) } else { (c, a) };
+                        self.search.matches[start..=end]
+                            .iter()
+                            .map(|m| m.path.clone())
+                            .collect::<Vec<_>>()
+                    }
+                    _ => {
+                        self.mark_anchor = Some(current.clone());
+                        self.marked.insert(current.clone());
+                        self.flash("range anchor is no longer in matches");
+                        return;
+                    }
+                }
+            }
+        };
+
+        let count = paths.len();
+        self.marked.extend(paths);
+        self.mark_anchor = Some(current);
+        self.flash(format!("marked {count} item(s) in range"));
+    }
+
+    pub(super) fn invert_visible_marks(&mut self) {
+        let paths = match self.mode {
+            super::Mode::Normal => self
+                .tree
+                .visible
+                .iter()
+                .filter_map(|&idx| (idx != 0).then(|| self.tree.nodes[idx].path.clone()))
+                .collect::<Vec<_>>(),
+            super::Mode::Search => self
+                .search
+                .matches
+                .iter()
+                .map(|m| m.path.clone())
+                .collect::<Vec<_>>(),
+        };
+        if paths.is_empty() {
+            self.flash("nothing to invert");
+            return;
+        }
+        for path in paths {
+            if !self.marked.remove(&path) {
+                self.marked.insert(path);
+            }
+        }
+        self.flash(format!("{} marked", self.marked.len()));
+    }
+
+    pub(super) fn mark_search_matches(&mut self) {
+        if self.search.matches.is_empty() {
+            self.flash("no search matches");
+            return;
+        }
+        for m in &self.search.matches {
+            self.marked.insert(m.path.clone());
+        }
+        self.flash(format!("marked {} match(es)", self.search.matches.len()));
     }
 
     pub(super) fn stage_clipboard(&mut self, mode: ClipboardMode) {
@@ -464,7 +577,21 @@ impl App {
             "copy" | "yank" => self.stage_clipboard(ClipboardMode::Copy),
             "cut" => self.stage_clipboard(ClipboardMode::Move),
             "paste" => self.paste_clipboard()?,
-            "mark" => self.toggle_mark_current(),
+            "mark" => match parts.next() {
+                None => self.toggle_mark_current(),
+                Some("visible") | Some("all") => {
+                    if self.mode == super::Mode::Search {
+                        self.mark_search_matches();
+                    } else {
+                        self.mark_visible();
+                    }
+                }
+                Some("matches") => self.mark_search_matches(),
+                Some("range") => self.mark_range_to_current(),
+                Some("invert") => self.invert_visible_marks(),
+                Some(other) => self.flash(format!("unknown mark command: {other}")),
+            },
+            "invert" => self.invert_visible_marks(),
             "clear" => self.clear_marks(),
             "bookmark" => self.add_bookmark(),
             "jump" => self.jump_bookmark()?,

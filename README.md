@@ -67,7 +67,8 @@ On wide terminals, kudzu shows a background-loaded preview pane with file metada
 | `/` | Enter search mode |
 | `n` / `N` | New file / new folder |
 | `R` | Rename |
-| `v` / `V` / `A` | Mark selected / clear marks / mark visible |
+| `v` / `S` / `I` | Mark/select file / range select from last mark / invert visible marks |
+| `V` / `A` | Clear marks / mark visible |
 | `y` / `x` / `p` | Copy / cut / paste selected or marked files |
 | `C` / `z` | Cycle conflict policy / undo last rename or paste |
 | `m` / `'` | Bookmark selected directory / jump through bookmarks |
@@ -89,19 +90,20 @@ On wide terminals, kudzu shows a background-loaded preview pane with file metada
 | `↑` / `↓` | Select match |
 | `Enter` | Jump to match / open file |
 | `Ctrl-o` | Reveal selected match in the tree |
-| `v` / `y` / `x` / `p` | Mark / copy / cut / paste selected match |
+| `v` / `S` / `I` / `A` | Mark match / range select / invert matches / mark all matches |
+| `y` / `x` / `p` | Copy / cut / paste selected or marked files |
 | `Backspace` / `Ctrl-w` | Delete char / word |
 | `Esc` / `Ctrl-c` | Exit search |
 
 ### Mouse
 
 - Click to select, double-click to expand dir or open file
-- Right-click for context menu (new file/folder, rename, delete, open)
+- Right-click for context menu (mark, range select, invert, new file/folder, rename, delete, open)
 - Scroll to navigate
 
 ### Command prompt
 
-Press `:` and type commands such as `copy`, `cut`, `paste`, `undo`, `bookmark`, `jump`, `rescan`, `open`, or `conflict rename|skip|overwrite`.
+Press `:` and type commands such as `copy`, `cut`, `paste`, `mark`, `mark visible`, `mark range`, `mark matches`, `mark invert`, `invert`, `clear`, `undo`, `bookmark`, `jump`, `rescan`, `open`, or `conflict rename|skip|overwrite`.
 
 ## Configuration
 

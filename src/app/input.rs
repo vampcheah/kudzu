@@ -79,6 +79,8 @@ impl App {
             KeyCode::Char('R') => self.start_rename(),
             KeyCode::Char('D') => self.start_delete(),
             KeyCode::Char('v') => self.toggle_mark_current(),
+            KeyCode::Char('S') => self.mark_range_to_current(),
+            KeyCode::Char('I') => self.invert_visible_marks(),
             KeyCode::Char('V') => self.clear_marks(),
             KeyCode::Char('A') => self.mark_visible(),
             KeyCode::Char('y') => self.stage_clipboard(ClipboardMode::Copy),
@@ -150,6 +152,9 @@ impl App {
                 }
             }
             KeyCode::Char('v') => self.toggle_mark_current(),
+            KeyCode::Char('S') => self.mark_range_to_current(),
+            KeyCode::Char('I') => self.invert_visible_marks(),
+            KeyCode::Char('A') => self.mark_search_matches(),
             KeyCode::Char('y') => self.stage_clipboard(ClipboardMode::Copy),
             KeyCode::Char('x') => self.stage_clipboard(ClipboardMode::Move),
             KeyCode::Char('p') => self.paste_clipboard()?,

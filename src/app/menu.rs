@@ -10,6 +10,9 @@ pub enum MenuItem {
     NewFile,
     Rename,
     Delete,
+    ToggleMark,
+    MarkRange,
+    InvertMarks,
     OpenFile,
     OpenFolder,
 }
@@ -21,6 +24,9 @@ impl MenuItem {
             MenuItem::NewFile => "New File",
             MenuItem::Rename => "Rename",
             MenuItem::Delete => "Move to Trash",
+            MenuItem::ToggleMark => "Mark / Unmark",
+            MenuItem::MarkRange => "Mark Range",
+            MenuItem::InvertMarks => "Invert Visible Marks",
             MenuItem::OpenFile => "Open File",
             MenuItem::OpenFolder => "Open Folder",
         }
@@ -58,6 +64,9 @@ impl App {
         let mut items = vec![MenuItem::NewFolder, MenuItem::NewFile];
         match target {
             Some(idx) if idx != 0 => {
+                items.push(MenuItem::ToggleMark);
+                items.push(MenuItem::MarkRange);
+                items.push(MenuItem::InvertMarks);
                 items.push(MenuItem::Rename);
                 items.push(MenuItem::Delete);
                 if self.tree.nodes[idx].is_dir {
@@ -67,6 +76,7 @@ impl App {
                 }
             }
             _ => {
+                items.push(MenuItem::InvertMarks);
                 items.push(MenuItem::OpenFolder);
             }
         }
@@ -153,6 +163,15 @@ impl App {
                     });
                 }
             }
+            MenuItem::ToggleMark => {
+                if let Some(idx) = target
+                    && idx != 0
+                {
+                    self.toggle_mark_path(self.tree.nodes[idx].path.clone());
+                }
+            }
+            MenuItem::MarkRange => self.mark_range_to_current(),
+            MenuItem::InvertMarks => self.invert_visible_marks(),
             MenuItem::OpenFile => {
                 if let Some(idx) = target {
                     let node = &self.tree.nodes[idx];

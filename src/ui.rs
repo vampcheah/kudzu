@@ -461,18 +461,18 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
             if !app.marked.is_empty() {
                 right_spans.push(Span::raw("  "));
                 right_spans.push(Span::styled(
-                    format!("[{} marked]", app.marked.len()),
+                    format!("[{} selected]", app.marked.len()),
                     Style::default().fg(ACCENT),
                 ));
             }
             if let Some(clip) = &app.clipboard {
                 let verb = match clip.mode {
                     crate::app::ClipboardMode::Copy => "copy",
-                    crate::app::ClipboardMode::Move => "move",
+                    crate::app::ClipboardMode::Move => "cut",
                 };
                 right_spans.push(Span::raw("  "));
                 right_spans.push(Span::styled(
-                    format!("[{verb} {}]", clip.paths.len()),
+                    format!("[clipboard: {verb} {}]", clip.paths.len()),
                     Style::default().fg(Color::Magenta),
                 ));
             }
@@ -561,13 +561,14 @@ const HELP_PAGES: &[HelpPage] = &[
             ("n", "new file in selected dir"),
             ("N", "new folder in selected dir"),
             ("R", "rename selected"),
-            ("v / V / A", "mark · clear marks · mark visible"),
+            ("v / S / I", "mark/select · range select · invert"),
+            ("V / A", "clear marks · mark visible"),
             ("y / x / p", "copy · cut · paste"),
             ("C / z", "cycle conflict policy · undo"),
             ("m / '", "bookmark directory · jump bookmark"),
             (":", "command prompt"),
             ("D", "move selected or marked to trash (confirm y)"),
-            ("right-click", "context menu"),
+            ("right-click", "context menu with mark actions"),
         ],
     },
     HelpPage {
@@ -589,7 +590,8 @@ const HELP_PAGES: &[HelpPage] = &[
             ("↑ / ↓", "select match"),
             ("Enter", "jump to (open if file)"),
             ("Ctrl-o", "reveal match in tree"),
-            ("v / y / x / p", "mark · copy · cut · paste"),
+            ("v / S / I / A", "mark · range · invert · mark matches"),
+            ("y / x / p", "copy · cut · paste"),
             ("Backspace", "delete char"),
             ("Ctrl-w", "delete word"),
             ("Esc / Ctrl-c", "exit search"),

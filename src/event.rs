@@ -1,7 +1,7 @@
 use std::{path::PathBuf, thread, time::Duration};
 
 use anyhow::Result;
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use crossterm::event::{self, Event as CtEvent};
 
 pub enum AppEvent {
@@ -26,17 +26,19 @@ impl EventLoop {
         // Input thread.
         {
             let tx = tx.clone();
-            thread::spawn(move || loop {
-                if let Ok(true) = event::poll(Duration::from_millis(200)) {
-                    if let Ok(ev) = event::read() {
-                        if tx.send(AppEvent::Input(ev)).is_err() {
+            thread::spawn(move || {
+                loop {
+                    if let Ok(true) = event::poll(Duration::from_millis(200)) {
+                        if let Ok(ev) = event::read()
+                            && tx.send(AppEvent::Input(ev)).is_err()
+                        {
                             break;
                         }
-                    }
-                } else {
-                    // idle tick so app can do periodic work if needed
-                    if tx.send(AppEvent::Tick).is_err() {
-                        break;
+                    } else {
+                        // idle tick so app can do periodic work if needed
+                        if tx.send(AppEvent::Tick).is_err() {
+                            break;
+                        }
                     }
                 }
             });

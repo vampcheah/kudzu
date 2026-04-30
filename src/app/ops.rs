@@ -258,25 +258,25 @@ impl App {
     /// After creating/renaming on disk, refresh the affected directory and
     /// place the selection on the new node when possible.
     pub(super) fn post_mutation(&mut self, parent_dir: &Path, select_path: Option<&PathBuf>) {
-        if let Some(parent_idx) = self.tree.find_by_path(parent_dir) {
-            if self.tree.nodes[parent_idx].is_dir && !self.tree.nodes[parent_idx].expanded {
-                if let Err(e) = self.tree.expand(parent_idx) {
-                    self.flash(format!("expand failed: {}", e));
-                    return;
-                }
-            }
+        if let Some(parent_idx) = self
+            .tree
+            .find_by_path(parent_dir)
+            .filter(|&idx| self.tree.nodes[idx].is_dir && !self.tree.nodes[idx].expanded)
+            && let Err(e) = self.tree.expand(parent_idx)
+        {
+            self.flash(format!("expand failed: {}", e));
+            return;
         }
         if let Err(e) = self.tree.refresh_dir(parent_dir) {
             self.flash(format!("refresh failed: {}", e));
             return;
         }
         self.tree.rebuild_visible();
-        if let Some(path) = select_path {
-            if let Some(node_idx) = self.tree.find_by_path(path) {
-                if let Some(pos) = self.tree.visible.iter().position(|&i| i == node_idx) {
-                    self.selected = pos;
-                }
-            }
+        if let Some(path) = select_path
+            && let Some(node_idx) = self.tree.find_by_path(path)
+            && let Some(pos) = self.tree.visible.iter().position(|&i| i == node_idx)
+        {
+            self.selected = pos;
         }
         if self.selected >= self.tree.visible.len() {
             self.selected = self.tree.visible.len().saturating_sub(1);

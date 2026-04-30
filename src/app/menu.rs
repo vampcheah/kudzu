@@ -126,31 +126,31 @@ impl App {
                 });
             }
             MenuItem::Rename => {
-                if let Some(idx) = target {
-                    if idx != 0 {
-                        let node = &self.tree.nodes[idx];
-                        let name = node.name.clone();
-                        let cursor = name.chars().count();
-                        self.input = Some(Prompt {
-                            kind: PromptKind::Rename,
-                            buffer: name,
-                            cursor,
-                            target: node.path.clone(),
-                        });
-                    }
+                if let Some(idx) = target
+                    && idx != 0
+                {
+                    let node = &self.tree.nodes[idx];
+                    let name = node.name.clone();
+                    let cursor = name.chars().count();
+                    self.input = Some(Prompt {
+                        kind: PromptKind::Rename,
+                        buffer: name,
+                        cursor,
+                        target: node.path.clone(),
+                    });
                 }
             }
             MenuItem::Delete => {
-                if let Some(idx) = target {
-                    if idx != 0 {
-                        let node = &self.tree.nodes[idx];
-                        self.input = Some(Prompt {
-                            kind: PromptKind::Delete,
-                            buffer: String::new(),
-                            cursor: 0,
-                            target: node.path.clone(),
-                        });
-                    }
+                if let Some(idx) = target
+                    && idx != 0
+                {
+                    let node = &self.tree.nodes[idx];
+                    self.input = Some(Prompt {
+                        kind: PromptKind::Delete,
+                        buffer: String::new(),
+                        cursor: 0,
+                        target: node.path.clone(),
+                    });
                 }
             }
             MenuItem::OpenFile => {
@@ -188,13 +188,14 @@ impl App {
                     return Ok(Action::None);
                 }
                 let row_in = m.row.saturating_sub(rect.y) as i32 - 1;
-                if let Some(menu) = self.menu.as_mut() {
-                    if row_in >= 0 && (row_in as usize) < menu.items.len() {
-                        let item = menu.items[row_in as usize];
-                        let target = menu.target;
-                        self.menu = None;
-                        return self.execute_menu_item(item, target);
-                    }
+                if let Some(menu) = self.menu.as_mut()
+                    && row_in >= 0
+                    && (row_in as usize) < menu.items.len()
+                {
+                    let item = menu.items[row_in as usize];
+                    let target = menu.target;
+                    self.menu = None;
+                    return self.execute_menu_item(item, target);
                 }
             }
             MouseEventKind::Down(_) => {
@@ -202,10 +203,11 @@ impl App {
             }
             MouseEventKind::Moved if inside => {
                 let row_in = m.row.saturating_sub(rect.y) as i32 - 1;
-                if let Some(menu) = self.menu.as_mut() {
-                    if row_in >= 0 && (row_in as usize) < menu.items.len() {
-                        menu.selected = row_in as usize;
-                    }
+                if let Some(menu) = self.menu.as_mut()
+                    && row_in >= 0
+                    && (row_in as usize) < menu.items.len()
+                {
+                    menu.selected = row_in as usize;
                 }
             }
             _ => {}

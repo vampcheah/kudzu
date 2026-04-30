@@ -12,11 +12,11 @@ fn get_indent(depth: usize) -> &'static str {
 }
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
-    Frame,
 };
 
 use crate::{
@@ -212,11 +212,7 @@ fn inner_rect(area: Rect) -> Rect {
 fn render_tree_row<'a>(node: &'a Node, selected: bool, highlight: &[u32]) -> ListItem<'a> {
     let indent: &'static str = get_indent(node.depth);
     let icon: &'static str = if node.is_dir {
-        if node.expanded {
-            "▼ "
-        } else {
-            "▶ "
-        }
+        if node.expanded { "▼ " } else { "▶ " }
     } else {
         "  "
     };

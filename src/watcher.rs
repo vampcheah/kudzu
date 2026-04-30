@@ -7,7 +7,7 @@ use std::{
 use anyhow::Result;
 use crossbeam_channel::Sender;
 use notify::{RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, FileIdMap, new_debouncer};
 
 use crate::event::AppEvent;
 

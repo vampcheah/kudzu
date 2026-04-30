@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,12 +56,10 @@ impl<'de> Deserialize<'de> for DoubleClick {
 }
 
 fn default_file_manager() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(target_os = "windows") {
-        "explorer"
-    } else {
-        "xdg-open"
+    std::cfg_select! {
+        target_os = "macos" => "open",
+        target_os = "windows" => "explorer",
+        _ => "xdg-open",
     }
 }
 
@@ -70,11 +68,11 @@ impl Config {
     /// overlay CLI args from `env::args()`.
     pub fn load() -> Result<Self> {
         let mut cfg = Self::default();
-        if let Some(path) = config_path() {
-            if path.exists() {
-                let text = fs::read_to_string(&path)?;
-                apply_toml(&mut cfg, &text)?;
-            }
+        if let Some(path) = config_path()
+            && path.exists()
+        {
+            let text = fs::read_to_string(&path)?;
+            apply_toml(&mut cfg, &text)?;
         }
         apply_cli(&mut cfg, env::args().skip(1))?;
         Ok(cfg)
@@ -82,10 +80,10 @@ impl Config {
 }
 
 fn config_path() -> Option<PathBuf> {
-    if let Ok(dir) = env::var("XDG_CONFIG_HOME") {
-        if !dir.is_empty() {
-            return Some(PathBuf::from(dir).join("kudzu/config.toml"));
-        }
+    if let Ok(dir) = env::var("XDG_CONFIG_HOME")
+        && !dir.is_empty()
+    {
+        return Some(PathBuf::from(dir).join("kudzu/config.toml"));
     }
     env::var("HOME")
         .ok()

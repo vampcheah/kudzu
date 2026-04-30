@@ -19,9 +19,9 @@ use crossbeam_channel::Sender;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::Backend, layout::Rect, Terminal};
+use ratatui::{Terminal, backend::Backend, layout::Rect};
 
 use crate::{
     config::Config,
@@ -167,11 +167,11 @@ impl App {
     }
 
     pub(super) fn expire_status(&mut self) {
-        if let Some(t) = self.status_until {
-            if Instant::now() > t {
-                self.status.clear();
-                self.status_until = None;
-            }
+        if let Some(t) = self.status_until
+            && Instant::now() > t
+        {
+            self.status.clear();
+            self.status_until = None;
         }
     }
 
@@ -204,10 +204,10 @@ impl App {
         self.search.cancel_indexing();
         self.mode = Mode::Normal;
         let selected_path = self.search.selected_match().map(|m| m.path.clone());
-        if let Some(path) = selected_path {
-            if let Some(node_idx) = self.tree.ensure_loaded(&path) {
-                self.reveal(node_idx);
-            }
+        if let Some(path) = selected_path
+            && let Some(node_idx) = self.tree.ensure_loaded(&path)
+        {
+            self.reveal(node_idx);
         }
         self.search.set_query("");
         self.search.matches.clear();

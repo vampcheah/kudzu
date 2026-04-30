@@ -4,7 +4,7 @@ use crossterm::event::{
 };
 use std::time::{Duration, Instant};
 
-use super::{Action, App, Mode, HELP_PAGES_LEN};
+use super::{Action, App, HELP_PAGES_LEN, Mode};
 use crate::config::DoubleClick;
 
 impl App {
@@ -53,10 +53,10 @@ impl App {
                         }
                     } else if self.tree.nodes[idx].is_dir && self.tree.nodes[idx].expanded {
                         self.toggle_and_reselect(idx)?;
-                    } else if let Some(parent) = self.tree.nodes[idx].parent {
-                        if let Some(pos) = self.tree.visible.iter().position(|&i| i == parent) {
-                            self.selected = pos;
-                        }
+                    } else if let Some(parent) = self.tree.nodes[idx].parent
+                        && let Some(pos) = self.tree.visible.iter().position(|&i| i == parent)
+                    {
+                        self.selected = pos;
                     }
                 }
             }
@@ -68,10 +68,10 @@ impl App {
                 None => self.flash("select a subdirectory to focus"),
             },
             KeyCode::Char('o') => {
-                if let Some(idx) = self.selected_node() {
-                    if !self.tree.nodes[idx].is_dir {
-                        return Ok(Action::OpenInEditor(self.tree.nodes[idx].path.clone()));
-                    }
+                if let Some(idx) = self.selected_node()
+                    && !self.tree.nodes[idx].is_dir
+                {
+                    return Ok(Action::OpenInEditor(self.tree.nodes[idx].path.clone()));
                 }
             }
             KeyCode::Char('n') => self.start_new_file(),
@@ -114,23 +114,20 @@ impl App {
     pub(super) fn on_key_search(&mut self, key: KeyEvent) -> Result<Action> {
         match key.code {
             KeyCode::Esc => self.exit_search(),
-            KeyCode::Enter => {
-                if let Some(m) = self.search.selected_match() {
-                    let is_dir = m.is_dir;
-                    let path = m.path.clone();
-                    self.exit_search();
-                    if is_dir {
-                        if let Some(node_idx) = self.tree.find_by_path(&path) {
-                            let _ = self.tree.expand(node_idx);
-                            self.tree.rebuild_visible();
-                            if let Some(pos) = self.tree.visible.iter().position(|&i| i == node_idx)
-                            {
-                                self.selected = pos;
-                            }
+            KeyCode::Enter if let Some(m) = self.search.selected_match() => {
+                let is_dir = m.is_dir;
+                let path = m.path.clone();
+                self.exit_search();
+                if is_dir {
+                    if let Some(node_idx) = self.tree.find_by_path(&path) {
+                        let _ = self.tree.expand(node_idx);
+                        self.tree.rebuild_visible();
+                        if let Some(pos) = self.tree.visible.iter().position(|&i| i == node_idx) {
+                            self.selected = pos;
                         }
-                    } else {
-                        return Ok(Action::OpenInEditor(path));
                     }
+                } else {
+                    return Ok(Action::OpenInEditor(path));
                 }
             }
             KeyCode::Down => self.search.move_selection(1),

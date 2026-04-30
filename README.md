@@ -45,6 +45,8 @@ kudzu ~/projects   # specify a root directory
 
 Editor is resolved as `$EDITOR` → `$VISUAL` → `vi`.
 
+On wide terminals, kudzu shows a preview pane with file metadata, text snippets, binary status, or directory counts.
+
 ## Key bindings
 
 ### Normal mode
@@ -65,7 +67,9 @@ Editor is resolved as `$EDITOR` → `$VISUAL` → `vi`.
 | `/` | Enter search mode |
 | `n` / `N` | New file / new folder |
 | `R` | Rename |
-| `D` | Move to trash (confirm with `y`) |
+| `v` / `V` / `A` | Mark selected / clear marks / mark visible |
+| `y` / `x` / `p` | Copy / cut / paste selected or marked files |
+| `D` | Move selected or marked files to trash (confirm with `y`) |
 | `M` | Open in file manager |
 | `.` | Toggle hidden files |
 | `i` | Toggle `.gitignore` handling |
@@ -78,8 +82,11 @@ Editor is resolved as `$EDITOR` → `$VISUAL` → `vi`.
 | Key | Action |
 | --- | --- |
 | (type) | Filter live |
+| `Tab` | Cycle name / path / content search |
 | `↑` / `↓` | Select match |
 | `Enter` | Jump to match / open file |
+| `Ctrl-o` | Reveal selected match in the tree |
+| `v` / `y` / `x` / `p` | Mark / copy / cut / paste selected match |
 | `Backspace` / `Ctrl-w` | Delete char / word |
 | `Esc` / `Ctrl-c` | Exit search |
 
@@ -101,17 +108,24 @@ gui_editor = "xdg-open"      # command for double_click = "gui", e.g. "code -n"
 file_opener = "xdg-open"     # command for images/binary files; defaults to open/explorer on macOS/Windows
 file_manager = "xdg-open"    # command for M key; defaults to open/explorer on macOS/Windows
 osc7 = false                 # emit OSC 7 working-directory escape sequences
+
+[openers]
+md = "code -n"               # extension-specific opener
+pdf = "xdg-open"
 ```
 
-`gui_editor`, `file_opener`, and `file_manager` support simple quoting, e.g. `"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" -n`.
+`gui_editor`, `file_opener`, `file_manager`, and extension-specific `openers` support simple quoting, e.g. `"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" -n`.
 
 Command-line flags override config:
 
 ```bash
 kudzu --show-hidden --double-click=gui --gui-editor=code
 kudzu --file-opener=xdg-open
+kudzu --opener=md:code --opener=pdf:xdg-open
 kudzu --no-ignore ~/projects
 kudzu --osc7                 # enable OSC 7 reports (e.g. for terminal tab titles)
+kudzu --print-config         # print the effective config
+kudzu --init-config          # create ~/.config/kudzu/config.toml
 kudzu --help
 ```
 

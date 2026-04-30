@@ -4,7 +4,7 @@ use crossterm::event::{
 };
 use std::time::{Duration, Instant};
 
-use super::{Action, App, HELP_PAGES_LEN, Mode};
+use super::{Action, App, ClipboardMode, HELP_PAGES_LEN, Mode};
 use crate::config::DoubleClick;
 
 impl App {
@@ -78,6 +78,12 @@ impl App {
             KeyCode::Char('N') => self.start_new_folder(),
             KeyCode::Char('R') => self.start_rename(),
             KeyCode::Char('D') => self.start_delete(),
+            KeyCode::Char('v') => self.toggle_mark_current(),
+            KeyCode::Char('V') => self.clear_marks(),
+            KeyCode::Char('A') => self.mark_visible(),
+            KeyCode::Char('y') => self.stage_clipboard(ClipboardMode::Copy),
+            KeyCode::Char('x') => self.stage_clipboard(ClipboardMode::Move),
+            KeyCode::Char('p') => self.paste_clipboard()?,
             KeyCode::Char('M') => return Ok(self.open_selected_in_filemanager()),
             KeyCode::Char('/') => self.enter_search()?,
             KeyCode::Char('h') => self.show_help = true,
@@ -129,6 +135,22 @@ impl App {
                 } else {
                     return Ok(Action::OpenInEditor(path));
                 }
+            }
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(path) = self.search.selected_match().map(|m| m.path.clone()) {
+                    self.exit_search();
+                    if let Some(node_idx) = self.tree.ensure_loaded(&path) {
+                        self.reveal(node_idx);
+                    }
+                }
+            }
+            KeyCode::Char('v') => self.toggle_mark_current(),
+            KeyCode::Char('y') => self.stage_clipboard(ClipboardMode::Copy),
+            KeyCode::Char('x') => self.stage_clipboard(ClipboardMode::Move),
+            KeyCode::Char('p') => self.paste_clipboard()?,
+            KeyCode::Tab => {
+                self.search.cycle_kind();
+                self.flash(format!("search: {:?}", self.search.kind).to_lowercase());
             }
             KeyCode::Down => self.search.move_selection(1),
             KeyCode::Up => self.search.move_selection(-1),

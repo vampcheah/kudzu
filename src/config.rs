@@ -1,4 +1,8 @@
-use std::{env, fs, path::PathBuf};
+use std::{
+    collections::HashMap,
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Deserializer};
@@ -16,6 +20,7 @@ pub struct Config {
     pub double_click: DoubleClick,
     pub gui_editor: String,
     pub file_opener: String,
+    pub openers: HashMap<String, String>,
     pub file_manager: String,
     pub osc7: bool,
     pub root: Option<PathBuf>,
@@ -29,6 +34,7 @@ impl Default for Config {
             double_click: DoubleClick::Editor,
             gui_editor: default_file_opener().to_string(),
             file_opener: default_file_opener().to_string(),
+            openers: HashMap::new(),
             file_manager: default_file_manager().to_string(),
             osc7: false,
             root: None,
@@ -44,6 +50,7 @@ struct FileConfig {
     double_click: Option<DoubleClick>,
     gui_editor: Option<String>,
     file_opener: Option<String>,
+    openers: Option<HashMap<String, String>>,
     file_manager: Option<String>,
     osc7: Option<bool>,
 }
@@ -84,6 +91,16 @@ impl Config {
         apply_cli(&mut cfg, env::args().skip(1))?;
         Ok(cfg)
     }
+
+    pub fn opener_for_path(&self, path: &Path) -> &str {
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            return &self.file_opener;
+        };
+        self.openers
+            .get(&ext.to_ascii_lowercase())
+            .map(String::as_str)
+            .unwrap_or(&self.file_opener)
+    }
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -115,6 +132,9 @@ fn apply_toml(cfg: &mut Config, text: &str) -> Result<()> {
     }
     if let Some(v) = file.file_opener {
         cfg.file_opener = v;
+    }
+    if let Some(v) = file.openers {
+        cfg.openers = normalize_openers(v);
     }
     if let Some(v) = file.file_manager {
         cfg.file_manager = v;
@@ -162,12 +182,34 @@ fn apply_cli<I: IntoIterator<Item = String>>(cfg: &mut Config, args: I) -> Resul
                     cfg.file_opener =
                         value.ok_or_else(|| anyhow::anyhow!("--file-opener requires =<cmd>"))?;
                 }
+                "opener" => {
+                    let v = value.ok_or_else(|| anyhow::anyhow!("--opener requires =ext:<cmd>"))?;
+                    let (ext, cmd) = parse_opener_rule(&v)?;
+                    cfg.openers.insert(ext, cmd);
+                }
                 "file-manager" => {
                     cfg.file_manager =
                         value.ok_or_else(|| anyhow::anyhow!("--file-manager requires =<cmd>"))?;
                 }
                 "help" | "h" => {
                     print_help();
+                    std::process::exit(0);
+                }
+                "print-config" => {
+                    print!("{}", default_config_text(&cfg));
+                    std::process::exit(0);
+                }
+                "init-config" => {
+                    let path = config_path()
+                        .ok_or_else(|| anyhow::anyhow!("could not resolve config path"))?;
+                    if path.exists() {
+                        bail!("config already exists: {}", path.display());
+                    }
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::write(&path, default_config_text(&cfg))?;
+                    println!("created {}", path.display());
                     std::process::exit(0);
                 }
                 other => bail!("unknown flag --{}", other),
@@ -200,15 +242,92 @@ fn print_help() {
              --double-click=gui       double-click spawns GUI editor\n\
              --gui-editor=<cmd>       GUI editor command (default: system opener)\n\
              --file-opener=<cmd>      system opener for images/binary files\n\
+             --opener=ext:<cmd>       opener for one file extension (repeatable)\n\
              --file-manager=<cmd>     file manager command (default: xdg-open/open/explorer)\n\
              --osc7                   emit OSC 7 working-directory reports\n\
              --no-osc7                disable OSC 7 reports (default)\n\
+             --print-config           print the effective config and exit\n\
+             --init-config            create the default config file and exit\n\
              --help                   print this help\n\
          \n\
          CONFIG FILE:\n\
              $XDG_CONFIG_HOME/kudzu/config.toml (or ~/.config/kudzu/config.toml)\n\
          "
     );
+}
+
+fn normalize_openers(openers: HashMap<String, String>) -> HashMap<String, String> {
+    openers
+        .into_iter()
+        .map(|(ext, cmd)| (normalize_ext(&ext), cmd))
+        .collect()
+}
+
+fn normalize_ext(ext: &str) -> String {
+    ext.trim().trim_start_matches('.').to_ascii_lowercase()
+}
+
+fn parse_opener_rule(rule: &str) -> Result<(String, String)> {
+    let (ext, cmd) = rule
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("--opener expects ext:<cmd>"))?;
+    let ext = normalize_ext(ext);
+    if ext.is_empty() {
+        bail!("--opener extension cannot be empty");
+    }
+    if cmd.trim().is_empty() {
+        bail!("--opener command cannot be empty");
+    }
+    Ok((ext, cmd.to_string()))
+}
+
+fn default_config_text(cfg: &Config) -> String {
+    let mut text = format!(
+        "show_hidden = {}\n\
+         respect_gitignore = {}\n\
+         double_click = \"{}\"\n\
+         gui_editor = \"{}\"\n\
+         file_opener = \"{}\"\n\
+         file_manager = \"{}\"\n\
+         osc7 = {}\n\
+         \n\
+         [openers]\n",
+        cfg.show_hidden,
+        cfg.respect_gitignore,
+        match cfg.double_click {
+            DoubleClick::Editor => "editor",
+            DoubleClick::Gui => "gui",
+        },
+        toml_string(&cfg.gui_editor),
+        toml_string(&cfg.file_opener),
+        toml_string(&cfg.file_manager),
+        cfg.osc7
+    );
+    if cfg.openers.is_empty() {
+        text.push_str("# md = \"code -n\"\n# pdf = \"xdg-open\"\n");
+    } else {
+        let mut keys: Vec<&String> = cfg.openers.keys().collect();
+        keys.sort();
+        for key in keys {
+            let cmd = &cfg.openers[key];
+            text.push_str(&format!("{} = \"{}\"\n", toml_key(key), toml_string(cmd)));
+        }
+    }
+    text
+}
+
+fn toml_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn toml_key(s: &str) -> String {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        s.to_string()
+    } else {
+        format!("\"{}\"", toml_string(s))
+    }
 }
 
 #[cfg(test)]
@@ -224,6 +343,9 @@ mod tests {
             double_click = "gui"
             gui_editor = "code -n"   # trailing comment
             file_opener = "xdg-open"
+            [openers]
+            PNG = "imv"
+            ".md" = "code"
         "#;
         let mut cfg = Config::default();
         apply_toml(&mut cfg, text).unwrap();
@@ -232,6 +354,8 @@ mod tests {
         assert_eq!(cfg.double_click, DoubleClick::Gui);
         assert_eq!(cfg.gui_editor, "code -n");
         assert_eq!(cfg.file_opener, "xdg-open");
+        assert_eq!(cfg.openers.get("png").map(String::as_str), Some("imv"));
+        assert_eq!(cfg.openers.get("md").map(String::as_str), Some("code"));
     }
 
     #[test]
@@ -246,6 +370,7 @@ mod tests {
                 "--show-hidden".to_string(),
                 "--double-click=gui".to_string(),
                 "--file-opener=wslview".to_string(),
+                "--opener=pdf:zathura".to_string(),
                 "/tmp".to_string(),
             ],
         )
@@ -253,6 +378,7 @@ mod tests {
         assert!(cfg.show_hidden);
         assert_eq!(cfg.double_click, DoubleClick::Gui);
         assert_eq!(cfg.file_opener, "wslview");
+        assert_eq!(cfg.openers.get("pdf").map(String::as_str), Some("zathura"));
         assert_eq!(cfg.root, Some(PathBuf::from("/tmp")));
     }
 

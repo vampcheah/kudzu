@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::{fs, io::Read, path::Path, sync::OnceLock};
 
 static INDENT_CACHE: OnceLock<Vec<&'static str>> = OnceLock::new();
 
@@ -21,7 +21,7 @@ use ratatui::{
 
 use crate::{
     app::{App, Mode, PromptKind},
-    search::SearchMatch,
+    search::{SearchKind, SearchMatch},
     tree::Node,
 };
 
@@ -43,9 +43,22 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(f.area());
 
     draw_header(f, app, chunks[0]);
+    let body = if chunks[1].width >= 88 {
+        let split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(58), Constraint::Percentage(42)])
+            .split(chunks[1]);
+        Some((split[0], split[1]))
+    } else {
+        None
+    };
+    let list_area = body.map(|b| b.0).unwrap_or(chunks[1]);
     match app.mode {
-        Mode::Normal => draw_tree(f, app, chunks[1]),
-        Mode::Search => draw_search(f, app, chunks[1]),
+        Mode::Normal => draw_tree(f, app, list_area),
+        Mode::Search => draw_search(f, app, list_area),
+    }
+    if let Some((_, preview_area)) = body {
+        draw_preview(f, app, preview_area);
     }
     draw_info(f, app, chunks[2]);
     if app.show_help {
@@ -152,7 +165,12 @@ fn draw_tree(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|(offset, &idx)| {
             let row = app.scroll + offset;
             let node = &app.tree.nodes[idx];
-            render_tree_row(node, row == app.selected, &[])
+            render_tree_row(
+                node,
+                row == app.selected,
+                app.marked.contains(&node.path),
+                &[],
+            )
         })
         .collect();
 
@@ -180,14 +198,21 @@ fn draw_search(f: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = app.search.matches[scroll..end]
         .iter()
         .enumerate()
-        .map(|(offset, m)| render_search_row(m, scroll + offset == selected))
+        .map(|(offset, m)| {
+            render_search_row(m, scroll + offset == selected, app.marked.contains(&m.path))
+        })
         .collect();
 
     let indexed = app.search.nucleo_item_count();
+    let kind = match app.search.kind {
+        SearchKind::Name => "name",
+        SearchKind::Path => "path",
+        SearchKind::Content => "content",
+    };
     let status = if app.search.indexing {
-        format!(" matches · {} / indexing\u{2026} ", total)
+        format!(" {kind} matches · {} / indexing\u{2026} ", total)
     } else {
-        format!(" matches · {} / {} ", total, indexed)
+        format!(" {kind} matches · {} / {} ", total, indexed)
     };
     let list = List::new(items).block(Block::default().borders(Borders::ALL).title(status));
     let mut state = ListState::default();
@@ -204,15 +229,25 @@ fn inner_rect(area: Rect) -> Rect {
     Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
 }
 
-fn render_tree_row<'a>(node: &'a Node, selected: bool, highlight: &[u32]) -> ListItem<'a> {
+fn render_tree_row<'a>(
+    node: &'a Node,
+    selected: bool,
+    marked: bool,
+    highlight: &[u32],
+) -> ListItem<'a> {
     let indent: &'static str = get_indent(node.depth);
+    let mark: &'static str = if marked { "* " } else { "  " };
     let icon: &'static str = if node.is_dir {
         if node.expanded { "▼ " } else { "▶ " }
     } else {
         "  "
     };
     let bs = base_style(node.is_dir, node.is_hidden, node.is_symlink);
-    let mut spans: Vec<Span<'a>> = vec![Span::raw(indent), Span::raw(icon)];
+    let mut spans: Vec<Span<'a>> = vec![
+        Span::raw(indent),
+        Span::styled(mark, Style::default().fg(ACCENT)),
+        Span::raw(icon),
+    ];
     spans.extend(highlighted_name(&node.name, highlight, bs));
     if node.is_dir {
         spans.push(Span::styled("/", bs));
@@ -223,10 +258,14 @@ fn render_tree_row<'a>(node: &'a Node, selected: bool, highlight: &[u32]) -> Lis
     finish_row(spans, selected)
 }
 
-fn render_search_row<'a>(m: &'a SearchMatch, selected: bool) -> ListItem<'a> {
+fn render_search_row<'a>(m: &'a SearchMatch, selected: bool, marked: bool) -> ListItem<'a> {
+    let mark: &'static str = if marked { "* " } else { "  " };
     let icon: &'static str = if m.is_dir { "▶ " } else { "  " };
     let bs = base_style(m.is_dir, m.is_hidden, m.is_symlink);
-    let mut spans: Vec<Span<'a>> = vec![Span::raw(icon)];
+    let mut spans: Vec<Span<'a>> = vec![
+        Span::styled(mark, Style::default().fg(ACCENT)),
+        Span::raw(icon),
+    ];
     spans.extend(highlighted_name(&m.name, &m.indices, bs));
     if m.is_dir {
         spans.push(Span::styled("/", bs));
@@ -239,7 +278,132 @@ fn render_search_row<'a>(m: &'a SearchMatch, selected: bool) -> ListItem<'a> {
             Style::default().fg(HIDDEN_FG),
         ));
     }
+    if let Some(detail) = &m.detail {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            detail.as_str(),
+            Style::default().fg(HIDDEN_FG),
+        ));
+    }
     finish_row(spans, selected)
+}
+
+fn draw_preview(f: &mut Frame, app: &App, area: Rect) {
+    let path = match app.mode {
+        Mode::Normal => app
+            .tree
+            .visible
+            .get(app.selected)
+            .map(|&idx| app.tree.nodes[idx].path.as_path()),
+        Mode::Search => app.search.selected_match().map(|m| m.path.as_path()),
+    };
+    let Some(path) = path else {
+        f.render_widget(
+            Paragraph::new("").block(Block::default().borders(Borders::ALL).title(" preview ")),
+            area,
+        );
+        return;
+    };
+    let lines = preview_lines(path, area.height.saturating_sub(2) as usize);
+    f.render_widget(
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" preview ")),
+        area,
+    );
+}
+
+fn preview_lines(path: &Path, max_lines: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    lines.push(Line::from(Span::styled(
+        name,
+        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+    )));
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        lines.push(Line::from(Span::styled(
+            "unreadable",
+            Style::default().fg(Color::Red),
+        )));
+        return lines;
+    };
+    let kind = if meta.is_dir() {
+        "directory"
+    } else if meta.file_type().is_symlink() {
+        "symlink"
+    } else if meta.is_file() {
+        "file"
+    } else {
+        "special"
+    };
+    lines.push(Line::from(format!("{kind} · {}", human_size(meta.len()))));
+    if let Ok(modified) = meta.modified()
+        && let Ok(age) = modified.elapsed()
+    {
+        lines.push(Line::from(format!(
+            "modified {} ago",
+            human_duration(age.as_secs())
+        )));
+    }
+    lines.push(Line::from(""));
+
+    if meta.is_dir() {
+        let mut dirs = 0usize;
+        let mut files = 0usize;
+        if let Ok(read_dir) = fs::read_dir(path) {
+            for entry in read_dir.flatten().take(1000) {
+                if entry.path().is_dir() {
+                    dirs += 1;
+                } else {
+                    files += 1;
+                }
+            }
+        }
+        lines.push(Line::from(format!("{dirs} dirs · {files} files")));
+        return lines;
+    }
+
+    if !meta.is_file() {
+        return lines;
+    }
+    let mut file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => {
+            lines.push(Line::from(Span::styled(
+                "unreadable",
+                Style::default().fg(Color::Red),
+            )));
+            return lines;
+        }
+    };
+    let mut buf = vec![0; 24 * 1024];
+    let n = file.read(&mut buf).unwrap_or(0);
+    buf.truncate(n);
+    if buf.contains(&0) || std::str::from_utf8(&buf).is_err() {
+        lines.push(Line::from(Span::styled(
+            "binary content",
+            Style::default().fg(HIDDEN_FG),
+        )));
+        return lines;
+    }
+    let text = String::from_utf8_lossy(&buf);
+    for line in text.lines().take(max_lines.saturating_sub(lines.len())) {
+        lines.push(Line::from(line.to_string()));
+    }
+    lines
+}
+
+fn human_duration(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
 }
 
 fn base_style(is_dir: bool, is_hidden: bool, is_symlink: bool) -> Style {
@@ -304,11 +468,15 @@ fn highlighted_name<'a>(name: &'a str, indices: &[u32], base: Style) -> Vec<Span
 fn draw_info(f: &mut Frame, app: &App, area: Rect) {
     if let Some(prompt) = &app.input {
         if prompt.kind == PromptKind::Delete {
-            let name = prompt
-                .target
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| prompt.target.display().to_string());
+            let name = if app.marked.is_empty() {
+                prompt
+                    .target
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| prompt.target.display().to_string())
+            } else {
+                format!("{} marked items", app.marked.len())
+            };
             let line = Line::from(vec![
                 Span::styled(
                     format!("move {} to trash? ", name),
@@ -378,6 +546,24 @@ fn draw_info(f: &mut Frame, app: &App, area: Rect) {
                 right_spans.push(Span::raw("  "));
                 right_spans.push(Span::styled("[hidden]", Style::default().fg(Color::Yellow)));
             }
+            if !app.marked.is_empty() {
+                right_spans.push(Span::raw("  "));
+                right_spans.push(Span::styled(
+                    format!("[{} marked]", app.marked.len()),
+                    Style::default().fg(ACCENT),
+                ));
+            }
+            if let Some(clip) = &app.clipboard {
+                let verb = match clip.mode {
+                    crate::app::ClipboardMode::Copy => "copy",
+                    crate::app::ClipboardMode::Move => "move",
+                };
+                right_spans.push(Span::raw("  "));
+                right_spans.push(Span::styled(
+                    format!("[{verb} {}]", clip.paths.len()),
+                    Style::default().fg(Color::Magenta),
+                ));
+            }
             if !app.status.is_empty() {
                 right_spans.push(Span::raw("  "));
                 right_spans.push(Span::styled(
@@ -438,7 +624,9 @@ const HELP_PAGES: &[HelpPage] = &[
             ("n", "new file in selected dir"),
             ("N", "new folder in selected dir"),
             ("R", "rename selected"),
-            ("D", "move selected to trash (confirm y)"),
+            ("v / V / A", "mark · clear marks · mark visible"),
+            ("y / x / p", "copy · cut · paste"),
+            ("D", "move selected or marked to trash (confirm y)"),
             ("right-click", "context menu"),
         ],
     },
@@ -456,9 +644,11 @@ const HELP_PAGES: &[HelpPage] = &[
         title: "Search",
         rows: &[
             ("/", "enter search"),
+            ("Tab", "cycle name/path/content search"),
             ("type", "filter"),
             ("↑ / ↓", "select match"),
             ("Enter", "jump to (open if file)"),
+            ("Ctrl-o", "reveal match in tree"),
             ("Backspace", "delete char"),
             ("Ctrl-w", "delete word"),
             ("Esc / Ctrl-c", "exit search"),

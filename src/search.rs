@@ -1,4 +1,6 @@
 use std::{
+    fs,
+    io::Read,
     path::PathBuf,
     sync::{
         Arc,
@@ -36,11 +38,20 @@ pub struct SearchMatch {
     pub is_hidden: bool,
     pub is_symlink: bool,
     pub path: PathBuf,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchKind {
+    Name,
+    Path,
+    Content,
 }
 
 pub struct Search {
     pub query: String,
     pub selected: usize,
+    pub kind: SearchKind,
     /// True while the background walker thread is still running.
     pub indexing: bool,
     /// Pre-built list of matches for this frame (rebuilt by tick()).
@@ -53,6 +64,8 @@ pub struct Search {
     indices_buf: Vec<u32>,
     tx: Sender<AppEvent>,
     generation: u64,
+    root: Option<PathBuf>,
+    opts: ScanOptions,
 }
 
 impl Search {
@@ -68,6 +81,7 @@ impl Search {
         Self {
             query: String::new(),
             selected: 0,
+            kind: SearchKind::Name,
             indexing: false,
             matches: Vec::new(),
             nucleo,
@@ -76,12 +90,16 @@ impl Search {
             indices_buf: Vec::new(),
             tx,
             generation: 0,
+            root: None,
+            opts: ScanOptions::default(),
         }
     }
 
     /// Cancel any running indexer, clear nucleo state, and start a fresh walk.
     pub fn start_indexing(&mut self, root: PathBuf, opts: ScanOptions) -> u64 {
         self.cancel.store(true, Ordering::Relaxed);
+        self.root = Some(root.clone());
+        self.opts = opts;
         self.generation = self.generation.wrapping_add(1);
         let generation = self.generation;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -158,16 +176,47 @@ impl Search {
     pub fn set_query(&mut self, new_query: &str) {
         let append = new_query.starts_with(self.query.as_str());
         self.query = new_query.to_string();
-        for col in 0..2 {
-            self.nucleo.pattern.reparse(
-                col,
-                new_query,
-                CaseMatching::Smart,
-                Normalization::Smart,
-                append,
-            );
+        if self.kind == SearchKind::Content {
+            self.rebuild_content_matches();
+            self.selected = 0;
+            return;
         }
+        let name_query = if self.kind == SearchKind::Name {
+            new_query
+        } else {
+            ""
+        };
+        let path_query = if self.kind == SearchKind::Path {
+            new_query
+        } else {
+            ""
+        };
+        self.nucleo.pattern.reparse(
+            0,
+            name_query,
+            CaseMatching::Smart,
+            Normalization::Smart,
+            append,
+        );
+        self.nucleo.pattern.reparse(
+            1,
+            path_query,
+            CaseMatching::Smart,
+            Normalization::Smart,
+            append,
+        );
         self.selected = 0;
+    }
+
+    pub fn cycle_kind(&mut self) {
+        self.kind = match self.kind {
+            SearchKind::Name => SearchKind::Path,
+            SearchKind::Path => SearchKind::Content,
+            SearchKind::Content => SearchKind::Name,
+        };
+        let query = self.query.clone();
+        self.matches.clear();
+        self.set_query(&query);
     }
 
     /// Modify the current query in-place without an extra clone.
@@ -179,6 +228,9 @@ impl Search {
 
     /// Drive the nucleo worker for up to 10ms; returns true if the snapshot changed.
     pub fn tick(&mut self) -> bool {
+        if self.kind == SearchKind::Content {
+            return false;
+        }
         let changed = self.nucleo.tick(10).changed;
         if changed {
             self.rebuild_matches();
@@ -221,7 +273,15 @@ impl Search {
 
         // Phase 1: clone raw data out of the snapshot (releases the borrow before
         // we need &mut self.matcher and &mut self.indices_buf).
-        let pat = self.nucleo.pattern.column_pattern(0).clone();
+        let pat = self
+            .nucleo
+            .pattern
+            .column_pattern(match self.kind {
+                SearchKind::Name => 0,
+                SearchKind::Path => 1,
+                SearchKind::Content => 0,
+            })
+            .clone();
         let raw: Vec<(String, String, bool, bool, bool, PathBuf)> = {
             let snapshot = self.nucleo.snapshot();
             let count = (snapshot.matched_item_count() as usize).min(5000);
@@ -262,7 +322,90 @@ impl Search {
                 is_hidden,
                 is_symlink,
                 path,
+                detail: None,
             });
+        }
+    }
+
+    fn rebuild_content_matches(&mut self) {
+        self.matches.clear();
+        let query = self.query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            return;
+        }
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let walker = WalkBuilder::new(&root)
+            .hidden(!self.opts.show_hidden)
+            .git_ignore(self.opts.respect_gitignore)
+            .git_global(self.opts.respect_gitignore)
+            .git_exclude(self.opts.respect_gitignore)
+            .parents(self.opts.respect_gitignore)
+            .require_git(false)
+            .build();
+
+        for result in walker {
+            if self.matches.len() >= 500 {
+                break;
+            }
+            let Ok(entry) = result else {
+                continue;
+            };
+            let Some(ft) = entry.file_type() else {
+                continue;
+            };
+            if !ft.is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let Ok(meta) = fs::metadata(path) else {
+                continue;
+            };
+            if meta.len() > 1024 * 1024 {
+                continue;
+            }
+            let Ok(mut file) = fs::File::open(path) else {
+                continue;
+            };
+            let mut buf = Vec::new();
+            if file.read_to_end(&mut buf).is_err()
+                || buf.contains(&0)
+                || std::str::from_utf8(&buf).is_err()
+            {
+                continue;
+            }
+            let text = String::from_utf8_lossy(&buf);
+            for (line_no, line) in text.lines().enumerate() {
+                if !line.to_ascii_lowercase().contains(&query) {
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let parent_rel = path
+                    .strip_prefix(&root)
+                    .ok()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.matches.push(SearchMatch {
+                    indices: Vec::new(),
+                    parent_rel,
+                    name,
+                    is_dir: false,
+                    is_hidden: path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with('.'))
+                        .unwrap_or(false),
+                    is_symlink: ft.is_symlink(),
+                    path: path.to_path_buf(),
+                    detail: Some(format!("{}: {}", line_no + 1, line.trim())),
+                });
+                break;
+            }
         }
     }
 }
@@ -331,5 +474,21 @@ mod tests {
         let (tx, _rx) = unbounded::<AppEvent>();
         let s = Search::new(tx);
         assert_eq!(s.matches.len(), 0);
+    }
+
+    #[test]
+    fn content_search_finds_text_file() {
+        let root = tmp("content");
+        fs::write(root.join("notes.txt"), "alpha\nneedle here\n").unwrap();
+        fs::write(root.join("bin.dat"), b"\0needle").unwrap();
+        let (tx, _rx) = unbounded::<AppEvent>();
+        let mut s = Search::new(tx);
+        s.start_indexing(root.clone(), ScanOptions::default());
+        s.kind = SearchKind::Content;
+        s.set_query("needle");
+
+        assert_eq!(s.matches.len(), 1);
+        assert!(s.matches[0].path.ends_with("notes.txt"));
+        assert!(s.matches[0].detail.as_deref().unwrap().contains("needle"));
     }
 }

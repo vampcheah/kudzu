@@ -51,6 +51,18 @@ pub(super) enum Action {
     RootChanged,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardMode {
+    Copy,
+    Move,
+}
+
+#[derive(Debug, Clone)]
+pub struct Clipboard {
+    pub mode: ClipboardMode,
+    pub paths: Vec<PathBuf>,
+}
+
 pub struct App {
     pub tree: Tree,
     pub selected: usize,
@@ -71,6 +83,8 @@ pub struct App {
     pub list_scroll: usize,
     pub input: Option<Prompt>,
     pub menu: Option<ContextMenu>,
+    pub marked: HashSet<PathBuf>,
+    pub clipboard: Option<Clipboard>,
     /// Screen rect of the context menu popup (set by UI each frame while
     /// the menu is visible). Used by mouse handlers to hit-test clicks.
     pub menu_rect: Option<Rect>,
@@ -103,6 +117,8 @@ impl App {
             list_scroll: 0,
             input: None,
             menu: None,
+            marked: HashSet::new(),
+            clipboard: None,
             menu_rect: None,
             last_click: None,
             watcher,
@@ -320,7 +336,7 @@ where
             }
             Action::OpenInEditor(path) => {
                 if should_use_file_opener(&path) {
-                    match spawn_detached(&app.cfg.file_opener, &path) {
+                    match spawn_detached(app.cfg.opener_for_path(&path), &path) {
                         Ok(bin) => app.flash(format!("opened {} in {}", path.display(), bin)),
                         Err(e) => app.flash(e),
                     }
@@ -337,7 +353,7 @@ where
             }
             Action::OpenInGui(path) => {
                 let opener = if should_use_file_opener(&path) {
-                    &app.cfg.file_opener
+                    app.cfg.opener_for_path(&path)
                 } else {
                     &app.cfg.gui_editor
                 };

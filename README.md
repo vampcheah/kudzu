@@ -138,6 +138,22 @@ kudzu --init-config          # create ~/.config/kudzu/config.toml
 kudzu --help
 ```
 
+## Development
+
+Run the same checks as GitHub Actions before pushing:
+
+```bash
+make ci
+```
+
+Bump and commit the Cargo version from a clean worktree:
+
+```bash
+./scripts/bump-version patch
+./scripts/bump-version minor --tag
+make bump-version bump=patch tag=1
+```
+
 ## License
 
 MIT

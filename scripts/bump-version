@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+usage() {
+  echo "Usage: ./scripts/bump-version patch|minor|major [--tag] [--no-verify]" >&2
+}
+
+bump="${1:-}"
+case "$bump" in
+  patch|minor|major) ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+shift
+
+create_tag=false
+verify=true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --tag)
+      create_tag=true
+      ;;
+    --no-verify)
+      verify=false
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+  shift
+done
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Refusing to bump version with uncommitted changes." >&2
+  git status --short >&2
+  echo "Commit or stash your work first, then run ./scripts/bump-version $bump." >&2
+  exit 1
+fi
+
+next_version="$(
+  python3 - "$bump" <<'PY'
+import pathlib
+import re
+import sys
+
+bump = sys.argv[1]
+path = pathlib.Path("Cargo.toml")
+text = path.read_text()
+match = re.search(r'(?m)^version = "(\d+)\.(\d+)\.(\d+)"$', text)
+if not match:
+    raise SystemExit("Could not find package version in Cargo.toml")
+
+major, minor, patch = map(int, match.groups())
+if bump == "major":
+    major += 1
+    minor = 0
+    patch = 0
+elif bump == "minor":
+    minor += 1
+    patch = 0
+else:
+    patch += 1
+
+version = f"{major}.{minor}.{patch}"
+path.write_text(text[:match.start(1)] + version + text[match.end(3):])
+print(version)
+PY
+)"
+
+cargo metadata --format-version 1 --no-deps >/dev/null
+
+if [[ "$verify" == true ]]; then
+  make ci
+fi
+
+git add Cargo.toml Cargo.lock
+git commit -m "Bump version to v${next_version}"
+
+if [[ "$create_tag" == true ]]; then
+  git tag -a "v${next_version}" -m "Release v${next_version}"
+fi
+
+echo "Bumped kudzu to v${next_version}"
+if [[ "$create_tag" == true ]]; then
+  echo "Created tag v${next_version}"
+fi

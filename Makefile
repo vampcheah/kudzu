@@ -3,7 +3,7 @@ BINDIR  = $(DESTDIR)$(PREFIX)/bin
 BIN     = kudzu
 TARGET  = target/release/$(BIN)
 
-.PHONY: all build install uninstall clean check-rust ci fmt clippy test
+.PHONY: all build install uninstall clean check-rust ci fmt clippy test bump-version
 
 all: build
 
@@ -34,6 +34,13 @@ clippy:
 
 test:
 	cargo test
+
+bump-version:
+	@if [ -z "$(bump)" ]; then \
+		echo "Usage: make bump-version bump=patch|minor|major [tag=1] [no_verify=1]" >&2; \
+		exit 2; \
+	fi
+	./scripts/bump-version "$(bump)" $(if $(tag),--tag,) $(if $(no_verify),--no-verify,)
 
 install: build
 	install -d $(BINDIR)
